@@ -8,7 +8,7 @@ import time
 
 # ================= 設定區 =================
 # 1. 請填入您的 Google Sheet ID
-SHEET_ID = "1gpq9Cye25rmPgyOt508L1sBvlIpPis45R09vn0uy434/edit?gid=0#gid=0" 
+SHEET_ID = "1gpq9Cye25rmPgyOt508L1sBvlIpPis45R09vn0uy434" 
 
 # 2. 金鑰檔案名稱
 JSON_KEYFILE = "secrets.json"
