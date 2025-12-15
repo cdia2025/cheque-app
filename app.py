@@ -10,6 +10,7 @@ import time
 # ================= 設定區 =================
 SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1gpq9Cye25rmPgyOt508L1sBvlIpPis45R09vn0uy434/edit"
 
+# 系統欄位 (必須完全一致)
 SYSTEM_COLS = ['Collected', 'DocGeneratedDate', 'CollectedDate', 'ResponsibleStaff']
 REQUIRED_COLS = ['ID序號', '編號', '姓名(中文)', '姓名(英文)', '電話', '實習日數', '反思會', '反思表', '家長/監護人']
 
@@ -29,7 +30,7 @@ def get_write_client():
 
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# ================= 核心函式 (快取) =================
+# ================= 核心函式 =================
 @st.cache_data(ttl=600)
 def get_sheet_names_cached():
     try:
@@ -44,12 +45,14 @@ def fetch_data_cached(sheet_name):
         df = conn.read(spreadsheet=SPREADSHEET_URL, worksheet=sheet_name)
         if not df.empty:
             df.columns = df.columns.str.strip()
+            # 強制 ID 轉字串並去空白
             if 'ID序號' in df.columns:
                 df['ID序號'] = df['ID序號'].astype(str).str.strip()
             else:
                 if len(df.columns) > 0:
                     df.rename(columns={df.columns[0]: 'ID序號'}, inplace=True)
                     df['ID序號'] = df['ID序號'].astype(str).str.strip()
+            
             for col in SYSTEM_COLS:
                 if col not in df.columns: df[col] = ''
             df = df.fillna('')
@@ -59,10 +62,31 @@ def fetch_data_cached(sheet_name):
     except:
         return pd.DataFrame(columns=REQUIRED_COLS + SYSTEM_COLS)
 
-# ================= 主程式 =================
-st.title("☁️ 實習津貼管理系統 (V41 資料編輯版)")
+# ================= 統計計算 =================
+def calculate_stats(df):
+    if df.empty or '反思會' not in df.columns:
+        return {'總人數': 0, '待匯出': 0, '待領取': 0, '已完成': 0, '不符資格': 0}
+    c1 = df['反思會'].astype(str).str.strip().str.upper()
+    c2 = df['反思表'].astype(str).str.strip().str.upper()
+    doc = df['DocGeneratedDate'].astype(str).str.strip()
+    done = df['Collected'].astype(str).str.strip().str.upper()
+    is_eligible = (c1 == 'Y') & (c2 == 'Y')
+    return {
+        '總人數': len(df),
+        '待匯出': (is_eligible & (doc == '')).sum(),
+        '待領取': ((doc != '') & (done != 'Y')).sum(),
+        '已完成': (done == 'Y').sum(),
+        '不符資格': ((~is_eligible) & (doc == '')).sum()
+    }
 
-# 側邊欄
+# ================= 主程式 =================
+st.title("☁️ 實習津貼管理系統 (V43 匯出修復版)")
+
+# Session State
+if 'df_main' not in st.session_state: st.session_state.df_main = None
+if 'current_sheet' not in st.session_state: st.session_state.current_sheet = None
+
+# --- 側邊欄 ---
 with st.sidebar:
     st.header("🎛️ 設定面板")
     staff_name = st.text_input("👤 負責職員姓名 (必填)", key="staff_input")
@@ -94,25 +118,19 @@ if not staff_name:
 df = fetch_data_cached(selected_sheet_name)
 
 # ================= 分頁 =================
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
-    "📥 建立新表", 
-    "📄 [1] 準備匯出", 
-    "✅ [2] 確認領取", 
-    "🚫 [3] 不符名單",
-    "🛠️ 進階管理",
-    "✏️ 修改資料"  # New Tab
+tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+    "📥 建立新表", "📄 [1] 匯出", "✅ [2] 領取", 
+    "🚫 [3] 不符", "🛠️ 管理", "✏️ 修改", "📊 統計"
 ])
 
 # ---------------- Tab 1: 建立新表 ----------------
 with tab1:
-    st.subheader("📥 上傳 Excel 並建立獨立工作表")
+    st.subheader("📥 上傳 Excel")
     uploaded_file = st.file_uploader("選擇 Excel 檔案", type=['xlsx', 'xls'], key="upl")
     new_sheet_name = st.text_input("輸入新工作表名稱", placeholder="2024_第一期", key="new_s_in")
-    
     if st.button("🚀 建立並上傳", type="primary"):
         if uploaded_file and new_sheet_name:
-            if new_sheet_name in sheet_names:
-                st.error("名稱已存在！")
+            if new_sheet_name in sheet_names: st.error("名稱已存在！")
             else:
                 try:
                     new_df = pd.read_excel(uploaded_file)
@@ -129,65 +147,121 @@ with tab1:
                         for col in SYSTEM_COLS: new_df[col] = ''
                         new_df['ID序號'] = new_df['ID序號'].astype(str)
                         new_df = new_df.fillna('')
-                        
                         with st.spinner("建立中..."):
                             gc = get_write_client()
                             sh = gc.open_by_url(SPREADSHEET_URL)
                             new_ws = sh.add_worksheet(title=new_sheet_name, rows=len(new_df)+50, cols=20)
                             new_ws.update([new_df.columns.tolist()] + new_df.values.tolist())
                             st.success(f"成功建立「{new_sheet_name}」！")
-                            time.sleep(2)
-                            st.cache_data.clear()
-                            st.rerun()
+                            time.sleep(2); st.cache_data.clear(); st.rerun()
                     else: st.error("欄位不足")
                 except Exception as e: st.error(f"錯誤: {e}")
         else: st.error("請填寫名稱並選擇檔案")
 
-# ---------------- Tab 2: 準備匯出 ----------------
+# ---------------- Tab 2: 準備匯出 (重點修復) ----------------
 with tab2:
     st.subheader(f"📄 準備匯出 ({selected_sheet_name})")
+    
     if '反思會' in df.columns:
         mask_ready = ((df['反思會'].astype(str).str.strip().str.upper() == 'Y') & 
                       (df['反思表'].astype(str).str.strip().str.upper() == 'Y') & 
                       (df['DocGeneratedDate'] == ''))
         df_ready = df[mask_ready].copy()
-        
         df_ready.insert(0, "選取", False)
-        edited_ready = st.data_editor(df_ready, column_config={"選取": st.column_config.CheckboxColumn(required=True)}, disabled=[c for c in df.columns if c!="選取"], hide_index=True, key="ed_ready")
+        
+        edited_ready = st.data_editor(
+            df_ready, 
+            column_config={"選取": st.column_config.CheckboxColumn(required=True)}, 
+            disabled=[c for c in df.columns if c!="選取"], 
+            hide_index=True, 
+            key="ed_ready"
+        )
         
         if st.button("📤 匯出 & 更新狀態", type="primary"):
             sel = edited_ready[edited_ready["選取"]==True]
-            if not sel.empty:
+            
+            if sel.empty:
+                st.warning("❌ 請先勾選要處理的人員！")
+            else:
                 try:
-                    gc = get_write_client()
-                    worksheet = gc.open_by_url(SPREADSHEET_URL).worksheet(selected_sheet_name)
-                    today = datetime.now().strftime("%Y-%m-%d")
-                    head = worksheet.row_values(1)
-                    c_doc = head.index('DocGeneratedDate')+1
-                    c_staff = head.index('ResponsibleStaff')+1
-                    cloud_ids = [str(x).strip() for x in worksheet.col_values(1)]
-                    
-                    prog = st.progress(0)
-                    ex_list = []
-                    for i, (idx, row) in enumerate(sel.iterrows()):
-                        tid = str(row['ID序號']).strip()
-                        if tid in cloud_ids:
-                            row_num = cloud_ids.index(tid) + 1
-                            worksheet.update_cell(row_num, c_doc, today)
-                            worksheet.update_cell(row_num, c_staff, staff_name)
-                            rec = row.to_dict(); del rec['選取']; rec.update({'StaffName':staff_name, 'TodayDate':today})
-                            ex_list.append(rec)
-                        prog.progress((i+1)/len(sel))
-                    
+                    with st.spinner("正在連線至 Google Sheets 更新狀態..."):
+                        gc = get_write_client()
+                        worksheet = gc.open_by_url(SPREADSHEET_URL).worksheet(selected_sheet_name)
+                        
+                        today = datetime.now().strftime("%Y-%m-%d")
+                        head = worksheet.row_values(1)
+                        
+                        # 檢查欄位是否存在
+                        if 'DocGeneratedDate' not in head or 'ResponsibleStaff' not in head:
+                            st.error("❌ Google Sheet 缺少必要欄位 (DocGeneratedDate 或 ResponsibleStaff)。")
+                            st.stop()
+                            
+                        c_doc = head.index('DocGeneratedDate')+1
+                        c_staff = head.index('ResponsibleStaff')+1
+                        
+                        # 關鍵：批次抓取所有 ID (轉字串、去空白)
+                        raw_ids = worksheet.col_values(1) # 第一欄是 ID
+                        cloud_ids = [str(x).strip() for x in raw_ids]
+                        
+                        prog = st.progress(0)
+                        ex_list = []
+                        missing_ids = []
+                        
+                        total = len(sel)
+                        
+                        for i, (idx, row) in enumerate(sel.iterrows()):
+                            # 介面上的 ID
+                            tid = str(row['ID序號']).strip()
+                            name = row['姓名(中文)']
+                            
+                            # 比對
+                            if tid in cloud_ids:
+                                # 找到在 Sheet 中的位置 (index + 1)
+                                row_num = cloud_ids.index(tid) + 1
+                                
+                                # 更新雲端
+                                worksheet.update_cell(row_num, c_doc, today)
+                                worksheet.update_cell(row_num, c_staff, staff_name)
+                                
+                                # 準備下載資料
+                                rec = row.to_dict()
+                                del rec['選取']
+                                rec.update({'StaffName':staff_name, 'TodayDate':today})
+                                ex_list.append(rec)
+                                
+                                st.toast(f"✅ 已更新: {name}")
+                            else:
+                                missing_ids.append(f"{name}({tid})")
+                                st.toast(f"⚠️ 找不到 ID: {tid}", icon="❌")
+                            
+                            prog.progress((i+1)/total)
+                        
+                    # 結果處理
                     if ex_list:
                         out = io.BytesIO()
                         pd.DataFrame(ex_list).to_excel(out, index=False)
-                        st.download_button("📥 下載 MailMerge Source", out.getvalue(), "MailMerge_Source.xlsx")
-                        st.success("完成！")
-                        time.sleep(1)
+                        
+                        st.success(f"🎉 成功處理 {len(ex_list)} 筆資料！")
+                        if missing_ids:
+                            st.warning(f"⚠️ 以下人員更新失敗 (找不到 ID)：{', '.join(missing_ids)}")
+                            
+                        st.download_button(
+                            label="📥 下載 MailMerge Source (Excel)", 
+                            data=out.getvalue(), 
+                            file_name="MailMerge_Source.xlsx", 
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                        )
+                        
+                        # 讓使用者看完訊息後再手動重整，或者自動重整
+                        st.info("💡 下載完成後，資料將移至 Tab 2 (確認領取)。系統將在 3 秒後重整...")
+                        time.sleep(3)
                         st.cache_data.clear()
                         st.rerun()
-                except Exception as e: st.error(f"錯誤: {e}")
+                    else:
+                        st.error(f"❌ 更新失敗！勾選的 {len(sel)} 筆資料，在 Google Sheet 中完全找不到對應 ID。請檢查「ID序號」欄位格式是否一致。")
+                        
+                except Exception as e: 
+                    st.error(f"❌ 發生系統錯誤: {e}")
 
 # ---------------- Tab 3: 確認領取 ----------------
 with tab3:
@@ -197,211 +271,148 @@ with tab3:
         df_conf = df[mask_conf].copy()
         df_conf.insert(0, "確認", False)
         ed_conf = st.data_editor(df_conf, column_config={"確認": st.column_config.CheckboxColumn(required=True)}, disabled=[c for c in df.columns if c!="確認"], hide_index=True, key="ed_conf")
-        
         if st.button("✅ 確認已取票", type="primary"):
             sel = ed_conf[ed_conf["確認"]==True]
             if not sel.empty:
                 try:
-                    gc = get_write_client()
-                    worksheet = gc.open_by_url(SPREADSHEET_URL).worksheet(selected_sheet_name)
-                    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                    head = worksheet.row_values(1)
-                    c_col = head.index('Collected')+1
-                    c_date = head.index('CollectedDate')+1
-                    cloud_ids = [str(x).strip() for x in worksheet.col_values(1)]
-                    
-                    prog = st.progress(0)
-                    for i, (idx, row) in enumerate(sel.iterrows()):
-                        tid = str(row['ID序號']).strip()
-                        if tid in cloud_ids:
-                            row_num = cloud_ids.index(tid) + 1
-                            worksheet.update_cell(row_num, c_col, 'Y')
-                            worksheet.update_cell(row_num, c_date, now)
-                        prog.progress((i+1)/len(sel))
-                    st.success("更新完成！")
-                    st.cache_data.clear()
-                    st.rerun()
+                    with st.spinner("更新雲端中..."):
+                        gc = get_write_client(); worksheet = gc.open_by_url(SPREADSHEET_URL).worksheet(selected_sheet_name)
+                        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S"); head = worksheet.row_values(1)
+                        c_col = head.index('Collected')+1; c_date = head.index('CollectedDate')+1
+                        cloud_ids = [str(x).strip() for x in worksheet.col_values(1)]; prog = st.progress(0)
+                        updated_cnt = 0
+                        for i, (idx, row) in enumerate(sel.iterrows()):
+                            tid = str(row['ID序號']).strip()
+                            if tid in cloud_ids:
+                                row_num = cloud_ids.index(tid) + 1
+                                worksheet.update_cell(row_num, c_col, 'Y')
+                                worksheet.update_cell(row_num, c_date, now)
+                                updated_cnt += 1
+                            prog.progress((i+1)/len(sel))
+                        st.success(f"成功確認 {updated_cnt} 筆領取！"); time.sleep(1); st.cache_data.clear(); st.rerun()
                 except Exception as e: st.error(f"錯誤: {e}")
         
-        if st.button("↩️ 退回至準備匯出 (清除日期)"):
+        if st.button("↩️ 退回至準備匯出"):
             sel = ed_conf[ed_conf["確認"]==True]
             if not sel.empty:
-                try:
-                    gc = get_write_client()
-                    worksheet = gc.open_by_url(SPREADSHEET_URL).worksheet(selected_sheet_name)
-                    head = worksheet.row_values(1)
-                    c_doc = head.index('DocGeneratedDate')+1
-                    c_staff = head.index('ResponsibleStaff')+1
-                    cloud_ids = [str(x).strip() for x in worksheet.col_values(1)]
-                    
-                    for idx, row in sel.iterrows():
-                        tid = str(row['ID序號']).strip()
-                        if tid in cloud_ids:
-                            row_num = cloud_ids.index(tid) + 1
-                            worksheet.update_cell(row_num, c_doc, "")
-                            worksheet.update_cell(row_num, c_staff, "")
-                    st.success("已退回")
-                    st.cache_data.clear()
-                    st.rerun()
-                except Exception as e: st.error(f"錯誤: {e}")
+                if st.checkbox("確定要退回？"):
+                    try:
+                        gc = get_write_client(); worksheet = gc.open_by_url(SPREADSHEET_URL).worksheet(selected_sheet_name)
+                        head = worksheet.row_values(1); c_doc = head.index('DocGeneratedDate')+1; c_staff = head.index('ResponsibleStaff')+1
+                        cloud_ids = [str(x).strip() for x in worksheet.col_values(1)]
+                        for idx, row in sel.iterrows():
+                            tid = str(row['ID序號']).strip()
+                            if tid in cloud_ids:
+                                r = cloud_ids.index(tid) + 1; worksheet.update_cell(r, c_doc, ""); worksheet.update_cell(r, c_staff, "")
+                        st.success("已退回"); time.sleep(1); st.cache_data.clear(); st.rerun()
+                    except Exception as e: st.error(f"錯誤: {e}")
 
 # ---------------- Tab 4: 不符名單 ----------------
 with tab4:
-    st.subheader(f"🚫 不符合資格名單 ({selected_sheet_name})")
-    
+    st.subheader(f"🚫 不符資格 ({selected_sheet_name})")
     if '反思會' in df.columns:
-        mask_fail = (((df['反思會'].astype(str).str.strip().str.upper() != 'Y') | 
-                      (df['反思表'].astype(str).str.strip().str.upper() != 'Y')) &
-                     (df['DocGeneratedDate'] == ''))
+        mask_fail = (((df['反思會'].astype(str).str.strip().str.upper() != 'Y') | (df['反思表'].astype(str).str.strip().str.upper() != 'Y')) & (df['DocGeneratedDate'] == ''))
         df_fail = df[mask_fail].copy()
-        
-        if df_fail.empty:
-            st.info("太棒了！沒有不符合資格的人員。")
+        if df_fail.empty: st.info("無不符資格人員")
         else:
-            st.warning(f"共有 {len(df_fail)} 人條件未達標。")
             df_fail.insert(0, "選取", False)
-            ed_fail = st.data_editor(df_fail, column_config={"選取": st.column_config.CheckboxColumn(required=True, label="強制放行")}, disabled=[c for c in df.columns if c != "選取"], hide_index=True, key="ed_fail")
-            
-            if st.button("➡️ 強制改為合格 (Y/Y) 並移至匯出區", type="primary"):
+            ed_fail = st.data_editor(df_fail, column_config={"選取": st.column_config.CheckboxColumn(required=True, label="放行")}, disabled=[c for c in df.columns if c != "選取"], hide_index=True, key="ed_fail")
+            if st.button("➡️ 強制放行 (改Y)", type="primary"):
                 sel = ed_fail[ed_fail["選取"]==True]
                 if not sel.empty:
-                    if st.checkbox("確定要強制修改 Google Sheet 資料為 Y 嗎？"):
+                    if st.checkbox("確認修改雲端資料？"):
                         try:
-                            gc = get_write_client()
-                            worksheet = gc.open_by_url(SPREADSHEET_URL).worksheet(selected_sheet_name)
+                            gc = get_write_client(); worksheet = gc.open_by_url(SPREADSHEET_URL).worksheet(selected_sheet_name)
                             head = worksheet.row_values(1)
-                            c1_idx = head.index('反思會')+1 if '反思會' in head else 7
-                            c2_idx = head.index('反思表')+1 if '反思表' in head else 8
-                            cloud_ids = [str(x).strip() for x in worksheet.col_values(1)]
-                            
-                            prog = st.progress(0)
+                            c1 = head.index('反思會')+1 if '反思會' in head else 7; c2 = head.index('反思表')+1 if '反思表' in head else 8
+                            cloud_ids = [str(x).strip() for x in worksheet.col_values(1)]; prog = st.progress(0)
                             for i, (idx, row) in enumerate(sel.iterrows()):
                                 tid = str(row['ID序號']).strip()
                                 if tid in cloud_ids:
-                                    r_num = cloud_ids.index(tid) + 1
-                                    worksheet.update_cell(r_num, c1_idx, 'Y')
-                                    worksheet.update_cell(r_num, c2_idx, 'Y')
+                                    r = cloud_ids.index(tid)+1; worksheet.update_cell(r, c1, 'Y'); worksheet.update_cell(r, c2, 'Y')
                                 prog.progress((i+1)/len(sel))
-                            
-                            st.success(f"已放行 {len(sel)} 人！請至 Tab 2 進行匯出。")
-                            time.sleep(1)
-                            st.cache_data.clear()
-                            st.rerun()
+                            st.success("已放行"); time.sleep(1); st.cache_data.clear(); st.rerun()
                         except Exception as e: st.error(f"錯誤: {e}")
 
 # ---------------- Tab 5: 進階管理 ----------------
 with tab5:
     st.subheader(f"🛠️ 進階管理 - {selected_sheet_name}")
     st.error("⚠️ 危險區域")
-    st.divider()
-    
-    if st.button("🔥 請求刪除本工作表"):
-        if len(sheet_names) <= 1:
-            st.error("Google Sheets 至少需保留一張表，無法刪除。")
-        else:
-            if 'confirm_del_sheet' not in st.session_state:
-                st.session_state.confirm_del_sheet = True
-    
+    if st.button("🔥 刪除本工作表"):
+        if len(sheet_names) <= 1: st.error("無法刪除最後一張表")
+        else: st.session_state.confirm_del_sheet = True
     if st.session_state.get('confirm_del_sheet', False):
-        st.warning(f"確定要永久刪除「{selected_sheet_name}」分頁嗎？")
-        col_yes, col_no = st.columns(2)
-        with col_yes:
-            if st.button("🔴 是，確認刪除", key="btn_del_sheet"):
+        st.warning(f"確定永久刪除「{selected_sheet_name}」？")
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button("🔴 確認刪除", key="del_s"):
                 with st.spinner("刪除中..."):
-                    gc = get_write_client()
-                    sh = gc.open_by_url(SPREADSHEET_URL)
-                    worksheet = sh.worksheet(selected_sheet_name)
-                    sh.del_worksheet(worksheet)
-                    st.success("已刪除！")
-                    st.session_state.confirm_del_sheet = False
-                    time.sleep(2)
-                    st.cache_data.clear()
-                    st.rerun()
-        with col_no:
-            if st.button("取消", key="btn_cancel_sheet"):
-                st.session_state.confirm_del_sheet = False
-                st.rerun()
+                    gc = get_write_client(); sh = gc.open_by_url(SPREADSHEET_URL)
+                    sh.del_worksheet(sh.worksheet(selected_sheet_name))
+                    st.success("已刪除"); st.session_state.confirm_del_sheet = False; time.sleep(2); st.cache_data.clear(); st.rerun()
+        with c2:
+            if st.button("取消", key="can_s"): st.session_state.confirm_del_sheet = False; st.rerun()
 
-# ---------------- Tab 6: 修改資料 (New) ----------------
+# ---------------- Tab 6: 修改資料 ----------------
 with tab6:
-    st.subheader("✏️ 修改參加者資料")
-    st.info("搜尋參加者 -> 點選目標 -> 修改欄位 -> 儲存")
-    
-    # 1. 搜尋區域
-    search_q = st.text_input("🔍 請輸入姓名或 ID：", placeholder="例如: 陳大文 或 102")
-    
-    selected_person = None
-    
-    if search_q:
-        # 模糊搜尋
-        mask_search = (
-            df['ID序號'].astype(str).str.contains(search_q, case=False) |
-            df['姓名(中文)'].astype(str).str.contains(search_q, case=False) |
-            df['姓名(英文)'].astype(str).str.contains(search_q, case=False)
-        )
-        search_results = df[mask_search]
-        
-        if search_results.empty:
-            st.warning("找不到符合的資料")
+    st.subheader("✏️ 修改資料")
+    q = st.text_input("🔍 搜尋姓名或ID")
+    if q:
+        mask = (df['ID序號'].str.contains(q, case=False) | df['姓名(中文)'].str.contains(q, case=False))
+        res = df[mask]
+        if res.empty: st.warning("無結果")
         else:
-            # 2. 選擇參加者
-            person_options = [f"{row['ID序號']} - {row['姓名(中文)']}" for idx, row in search_results.iterrows()]
-            selected_option = st.selectbox("👇 請選擇要修改的對象：", person_options)
-            
-            if selected_option:
-                target_id = selected_option.split(" - ")[0]
-                person_data = df[df['ID序號'] == target_id].iloc[0]
-                
-                st.divider()
-                st.markdown(f"### 📝 編輯：{person_data['姓名(中文)']}")
-                
-                # 3. 編輯表單
-                with st.form("edit_form"):
-                    col_e1, col_e2 = st.columns(2)
-                    with col_e1:
-                        new_name_chi = st.text_input("姓名 (中文)", value=person_data['姓名(中文)'])
-                        new_phone = st.text_input("電話", value=person_data['電話'])
-                        new_days = st.text_input("實習日數", value=person_data['實習日數'])
-                    with col_e2:
-                        new_name_eng = st.text_input("姓名 (英文)", value=person_data['姓名(英文)'])
-                        new_cond1 = st.selectbox("反思會 (Y/N)", ["Y", "N", ""], index=["Y", "N", ""].index(person_data['反思會']) if person_data['反思會'] in ["Y", "N", ""] else 2)
-                        new_cond2 = st.selectbox("反思表 (Y/N)", ["Y", "N", ""], index=["Y", "N", ""].index(person_data['反思表']) if person_data['反思表'] in ["Y", "N", ""] else 2)
-                    
-                    submitted = st.form_submit_button("💾 儲存修改")
-                    
-                    if submitted:
+            opt = [f"{r['ID序號']} - {r['姓名(中文)']}" for i, r in res.iterrows()]
+            sel_opt = st.selectbox("選擇對象", opt)
+            if sel_opt:
+                tid = sel_opt.split(" - ")[0]
+                p_data = df[df['ID序號']==tid].iloc[0]
+                with st.form("edit"):
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        n_chi = st.text_input("中文名", p_data['姓名(中文)']); ph = st.text_input("電話", p_data['電話']); da = st.text_input("日數", p_data['實習日數'])
+                    with c2:
+                        n_eng = st.text_input("英文名", p_data['姓名(英文)'])
+                        op = ["Y", "N", ""]; idx1 = op.index(p_data['反思會']) if p_data['反思會'] in op else 2; idx2 = op.index(p_data['反思表']) if p_data['反思表'] in op else 2
+                        cond1 = st.selectbox("反思會", op, index=idx1); cond2 = st.selectbox("反思表", op, index=idx2)
+                    if st.form_submit_button("💾 儲存"):
                         try:
-                            with st.spinner("正在寫入 Google Sheets..."):
-                                gc = get_write_client()
-                                worksheet = gc.open_by_url(SPREADSHEET_URL).worksheet(selected_sheet_name)
-                                cloud_ids = [str(x).strip() for x in worksheet.col_values(1)]
-                                
-                                if target_id in cloud_ids:
-                                    row_idx = cloud_ids.index(target_id) + 1
-                                    
-                                    # 取得欄位位置 (Index)
-                                    header = worksheet.row_values(1)
-                                    
-                                    # 建立要更新的 Mapping (欄位名: 新值)
-                                    updates = {
-                                        '姓名(中文)': new_name_chi,
-                                        '姓名(英文)': new_name_eng,
-                                        '電話': new_phone,
-                                        '實習日數': new_days,
-                                        '反思會': new_cond1,
-                                        '反思表': new_cond2
-                                    }
-                                    
-                                    for col_name, new_val in updates.items():
-                                        if col_name in header:
-                                            c_idx = header.index(col_name) + 1
-                                            worksheet.update_cell(row_idx, c_idx, new_val)
-                                    
-                                    st.success(f"✅ {new_name_chi} 的資料已更新！")
-                                    time.sleep(1)
-                                    st.cache_data.clear() # 清除快取以顯示最新
-                                    st.rerun()
-                                else:
-                                    st.error("雲端找不到此 ID，可能已被刪除。")
-                        except Exception as e:
-                            st.error(f"更新失敗: {e}")
+                            gc = get_write_client(); ws = gc.open_by_url(SPREADSHEET_URL).worksheet(selected_sheet_name)
+                            c_ids = [str(x).strip() for x in ws.col_values(1)]
+                            if tid in c_ids:
+                                r = c_ids.index(tid)+1; h = ws.row_values(1)
+                                ups = {'姓名(中文)':n_chi, '姓名(英文)':n_eng, '電話':ph, '實習日數':da, '反思會':cond1, '反思表':cond2}
+                                for k, v in ups.items():
+                                    if k in h: ws.update_cell(r, h.index(k)+1, v)
+                                st.success("已更新"); time.sleep(1); st.cache_data.clear(); st.rerun()
+                            else: st.error("找不到ID")
+                        except Exception as e: st.error(f"錯誤: {e}")
+
+# ---------------- Tab 7: 統計總覽 ----------------
+with tab7:
+    st.subheader("📊 統計")
+    st.info("跨表掃描需手動觸發。")
+    curr_stats = calculate_stats(df)
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("總人數", curr_stats['總人數'])
+    c2.metric("待匯出", curr_stats['待匯出'], delta_color="inverse")
+    c3.metric("待領取", curr_stats['待領取'], delta_color="normal")
+    c4.metric("已完成", curr_stats['已完成'])
+    c5.metric("不符", curr_stats['不符資格'], delta_color="inverse")
+    
+    st.divider()
+    if st.button("🚀 掃描所有工作表"):
+        with st.spinner("掃描中..."):
+            all_data = []
+            for sheet in sheet_names:
+                try:
+                    time.sleep(0.5)
+                    sub_df = conn.read(spreadsheet=SPREADSHEET_URL, worksheet=sheet, ttl=600)
+                    for c in SYSTEM_COLS: 
+                        if c not in sub_df.columns: sub_df[c]=''
+                    sub_df = sub_df.fillna('')
+                    stats = calculate_stats(sub_df)
+                    all_data.append({'工作表': sheet, '🟠 待匯出': stats['待匯出'], '🔵 待領取': stats['待領取'], '🟢 已完成': stats['已完成']})
+                except: pass
+            
+            st.dataframe(pd.DataFrame(all_data), use_container_width=True)
