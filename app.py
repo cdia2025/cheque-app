@@ -19,7 +19,7 @@ st.set_page_config(page_title="雲端實習津貼系統", layout="wide", page_ic
 if 'df_main' not in st.session_state: st.session_state.df_main = None
 if 'current_sheet' not in st.session_state: st.session_state.current_sheet = None
 
-# 用於控制刪除確認框的顯示狀態
+# 控制刪除確認框
 if 'show_del_confirm' not in st.session_state: st.session_state.show_del_confirm = False
 if 'show_clear_confirm' not in st.session_state: st.session_state.show_clear_confirm = False
 if 'show_sheet_confirm' not in st.session_state: st.session_state.show_sheet_confirm = False
@@ -31,8 +31,7 @@ def get_write_client():
         creds_dict = dict(st.secrets["connections"]["gsheets"])
         if "private_key" in creds_dict:
             creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
-        client = gspread.service_account_from_dict(creds_dict)
-        return client
+        return gspread.service_account_from_dict(creds_dict)
     except Exception as e:
         st.error(f"連線設定錯誤: {e}")
         st.stop()
@@ -44,13 +43,17 @@ def fetch_data_from_cloud(sheet_name):
     try:
         df = conn.read(spreadsheet=SPREADSHEET_URL, worksheet=sheet_name, ttl=0)
         if not df.empty:
+            # 1. 清理欄位名稱空白
             df.columns = df.columns.str.strip()
+            
+            # 2. ID 強制轉字串 (關鍵!)
             if 'ID序號' in df.columns:
-                df['ID序號'] = df['ID序號'].astype(str)
+                df['ID序號'] = df['ID序號'].astype(str).str.strip()
             else:
                 if len(df.columns) > 0:
                     df.rename(columns={df.columns[0]: 'ID序號'}, inplace=True)
-                    df['ID序號'] = df['ID序號'].astype(str)
+                    df['ID序號'] = df['ID序號'].astype(str).str.strip()
+
             for col in SYSTEM_COLS:
                 if col not in df.columns: df[col] = ''
             df = df.fillna('')
@@ -61,7 +64,7 @@ def fetch_data_from_cloud(sheet_name):
         return pd.DataFrame(columns=REQUIRED_COLS + SYSTEM_COLS)
 
 # ================= 主程式 =================
-st.title("☁️ 實習津貼管理系統 (V37 刪除修正版)")
+st.title("☁️ 實習津貼管理系統 (V38 強力刪除版)")
 
 # --- 側邊欄 ---
 with st.sidebar:
@@ -77,6 +80,9 @@ with st.sidebar:
         idx = 0
         if st.session_state.current_sheet in sheet_names:
             idx = sheet_names.index(st.session_state.current_sheet)
+        elif len(sheet_names) > 0:
+            idx = 0
+            
         selected_sheet_name = st.selectbox("📂 選擇工作表", sheet_names, index=idx)
     except Exception as e:
         st.error(f"連線失敗: {e}")
@@ -86,12 +92,13 @@ with st.sidebar:
         st.cache_data.clear()
         st.session_state.df_main = fetch_data_from_cloud(selected_sheet_name)
         st.session_state.current_sheet = selected_sheet_name
-        # 切換或重整時，務必關閉所有確認框
+        # 重置確認狀態
         st.session_state.show_del_confirm = False
         st.session_state.show_clear_confirm = False
         st.session_state.show_sheet_confirm = False
         st.rerun()
 
+    # 自動載入
     if st.session_state.df_main is None or st.session_state.current_sheet != selected_sheet_name:
         with st.spinner(f"讀取中..."):
             st.session_state.df_main = fetch_data_from_cloud(selected_sheet_name)
@@ -106,8 +113,10 @@ df = st.session_state.df_main
 try:
     worksheet = sh.worksheet(selected_sheet_name)
 except:
-    st.warning("工作表讀取中...")
-    st.stop()
+    st.warning("工作表讀取中，請稍候或重新整理...")
+    st.cache_data.clear()
+    time.sleep(1)
+    st.rerun()
 
 # ================= 分頁 =================
 tab_upload, tab_prepare, tab_confirm, tab_manage = st.tabs([
@@ -171,15 +180,21 @@ with tab_prepare:
                     c_staff = head.index('ResponsibleStaff')+1
                     prog = st.progress(0)
                     ex_list = []
+                    
+                    # 抓取雲端所有 ID 以便快速比對
+                    cloud_ids = [str(x).strip() for x in worksheet.col_values(1)] 
+                    
                     for i, (idx, row) in enumerate(sel.iterrows()):
+                        target_id = str(row['ID序號']).strip()
                         try:
-                            cell = worksheet.find(row['ID序號'], in_column=1)
-                            if cell:
-                                worksheet.update_cell(cell.row, c_doc, today)
-                                worksheet.update_cell(cell.row, c_staff, staff_name)
+                            # 比對 ID (注意：cloud_ids index 0 是 row 1)
+                            if target_id in cloud_ids:
+                                row_num = cloud_ids.index(target_id) + 1
+                                worksheet.update_cell(row_num, c_doc, today)
+                                worksheet.update_cell(row_num, c_staff, staff_name)
+                                
                                 rec = row.to_dict(); del rec['選取']; rec.update({'StaffName':staff_name, 'TodayDate':today})
                                 ex_list.append(rec)
-                                st.session_state.df_main.loc[df['ID序號']==row['ID序號'], ['DocGeneratedDate','ResponsibleStaff']] = [today, staff_name]
                         except: pass
                         prog.progress((i+1)/len(sel))
                     
@@ -190,7 +205,7 @@ with tab_prepare:
                         st.success("完成！")
                         time.sleep(1)
                         st.rerun()
-                except: st.error("雲端欄位對應錯誤，請檢查標題列")
+                except: st.error("雲端欄位對應錯誤")
 
 # ---------------- Tab 3: 確認領取 ----------------
 with tab_confirm:
@@ -206,73 +221,72 @@ with tab_confirm:
             if not sel.empty:
                 now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 head = worksheet.row_values(1)
-                try:
-                    c_col = head.index('Collected')+1
-                    c_date = head.index('CollectedDate')+1
-                    prog = st.progress(0)
-                    for i, (idx, row) in enumerate(sel.iterrows()):
-                        try:
-                            cell = worksheet.find(row['ID序號'], in_column=1)
-                            if cell:
-                                worksheet.update_cell(cell.row, c_col, 'Y')
-                                worksheet.update_cell(cell.row, c_date, now)
-                                st.session_state.df_main.loc[df['ID序號']==row['ID序號'], ['Collected','CollectedDate']] = ['Y', now]
-                        except: pass
-                        prog.progress((i+1)/len(sel))
-                    st.success("更新完成！")
-                    st.rerun()
-                except: st.error("雲端欄位對應錯誤")
+                c_col = head.index('Collected')+1
+                c_date = head.index('CollectedDate')+1
+                
+                # 抓取雲端所有 ID
+                cloud_ids = [str(x).strip() for x in worksheet.col_values(1)]
+                
+                prog = st.progress(0)
+                for i, (idx, row) in enumerate(sel.iterrows()):
+                    target_id = str(row['ID序號']).strip()
+                    try:
+                        if target_id in cloud_ids:
+                            row_num = cloud_ids.index(target_id) + 1
+                            worksheet.update_cell(row_num, c_col, 'Y')
+                            worksheet.update_cell(row_num, c_date, now)
+                    except: pass
+                    prog.progress((i+1)/len(sel))
+                st.success("更新完成！")
+                st.rerun()
 
-# ---------------- Tab 4: 刪除管理 (關鍵修復區域) ----------------
+# ---------------- Tab 4: 刪除管理 (強力修復版) ----------------
 with tab_manage:
     st.subheader(f"🛠️ 資料管理 - {selected_sheet_name}")
     st.error("⚠️ 危險操作區：請謹慎使用")
     
-    # 資料選取區
     df_del = df.copy()
     df_del.insert(0, "刪除", False)
     ed_del = st.data_editor(df_del, column_config={"刪除": st.column_config.CheckboxColumn(required=True, label="選取")}, hide_index=True, key="ed_del")
     
     st.divider()
-    
-    # 這裡分為三個獨立區塊
     c1, c2, c3 = st.columns(3)
     
     # === 功能 1: 刪除選取列 (修復版) ===
     with c1:
-        st.markdown("##### 🗑️ 刪除選取的列")
-        
-        # 按鈕 1：觸發確認框
+        st.markdown("##### 🗑️ 刪除選取列")
         if st.button("請求刪除選取資料"):
-            # 檢查是否有勾選
             sel_rows = ed_del[ed_del["刪除"]==True]
             if sel_rows.empty:
                 st.toast("請先勾選上方的資料！", icon="⚠️")
             else:
                 st.session_state.show_del_confirm = True
-                st.rerun() # 強制刷新以顯示下方確認框
+                st.rerun()
         
-        # 確認框 (只有當 flag 為 True 時才顯示)
         if st.session_state.show_del_confirm:
-            st.error("確定要刪除勾選的資料嗎？此動作無法復原。")
-            
-            col_confirm_1, col_cancel_1 = st.columns(2)
-            with col_confirm_1:
-                # 按鈕 2：真正執行
+            st.warning("確定要刪除勾選資料？(無法復原)")
+            col_yes, col_no = st.columns(2)
+            with col_yes:
                 if st.button("🔴 確認刪除", key="btn_confirm_del"):
-                    with st.spinner("正在刪除..."):
-                        # 重新取得勾選名單 (因為 rerun 後 ed_del 狀態還在)
+                    with st.spinner("正在刪除...請勿關閉視窗"):
                         sel_rows = ed_del[ed_del["刪除"]==True]
+                        
+                        # 1. 抓取雲端所有 ID (第一欄)
+                        # 這比 cell.find 快且準確
+                        cloud_ids = [str(x).strip() for x in worksheet.col_values(1)]
                         
                         rows_to_del = []
                         for idx, row in sel_rows.iterrows():
-                            try:
-                                cell = worksheet.find(row['ID序號'], in_column=1)
-                                if cell: rows_to_del.append(cell.row)
-                            except: pass
+                            target_id = str(row['ID序號']).strip()
+                            # 找出這個 ID 在雲端的所有位置 (可能有重複，都刪)
+                            # enumerate index 從 0 開始，sheet row 從 1 開始 -> index + 1
+                            matched_rows = [i + 1 for i, x in enumerate(cloud_ids) if x == target_id]
+                            rows_to_del.extend(matched_rows)
                         
-                        # 倒序刪除
-                        rows_to_del.sort(reverse=True)
+                        # 去重並排序 (由大到小)
+                        rows_to_del = sorted(list(set(rows_to_del)), reverse=True)
+                        
+                        # 執行刪除
                         for r in rows_to_del:
                             worksheet.delete_rows(r)
                         
@@ -281,51 +295,44 @@ with tab_manage:
                         time.sleep(1)
                         st.cache_data.clear()
                         st.rerun()
-            
-            with col_cancel_1:
+            with col_no:
                 if st.button("取消", key="btn_cancel_del"):
                     st.session_state.show_del_confirm = False
                     st.rerun()
 
     # === 功能 2: 清空整表 (修復版) ===
     with c2:
-        st.markdown("##### 🧹 清空內容 (留標題)")
-        
+        st.markdown("##### 🧹 清空內容")
         if st.button("請求清空內容"):
             st.session_state.show_clear_confirm = True
             st.rerun()
             
         if st.session_state.show_clear_confirm:
-            st.error("確定清空整張表？只會保留標題列。")
-            
-            col_confirm_2, col_cancel_2 = st.columns(2)
-            with col_confirm_2:
+            st.warning("確定清空？只會保留標題列。")
+            col_yes2, col_no2 = st.columns(2)
+            with col_yes2:
                 if st.button("🔴 確認清空", key="btn_confirm_clear"):
                     with st.spinner("清空中..."):
-                        # 1. 取得目前的標題 (從 DataFrame 拿最保險)
+                        # 1. 備份標題 (從目前的 DF 拿)
                         headers = df.columns.tolist()
-                        
-                        # 2. 清空
+                        # 2. 清空所有
                         worksheet.clear()
-                        
                         # 3. 寫回標題
-                        worksheet.update(range_name='A1', values=[headers])
+                        worksheet.append_row(headers)
                         
                         st.success("已清空內容！")
                         st.session_state.show_clear_confirm = False
                         time.sleep(1)
                         st.cache_data.clear()
                         st.rerun()
-            
-            with col_cancel_2:
+            with col_no2:
                 if st.button("取消", key="btn_cancel_clear"):
                     st.session_state.show_clear_confirm = False
                     st.rerun()
 
-    # === 功能 3: 刪除工作表 ===
+    # === 功能 3: 刪除工作表 (維持原樣) ===
     with c3:
         st.markdown("##### 🔥 刪除本工作表")
-        
         if st.button("請求刪除工作表"):
             if len(sheet_names) <= 1:
                 st.error("這是最後一張表，無法刪除。")
@@ -334,11 +341,10 @@ with tab_manage:
                 st.rerun()
         
         if st.session_state.show_sheet_confirm:
-            st.error(f"確定永久刪除「{selected_sheet_name}」？")
-            
-            col_confirm_3, col_cancel_3 = st.columns(2)
-            with col_confirm_3:
-                if st.button("🔴 確認刪除 Sheet", key="btn_confirm_sheet"):
+            st.warning(f"確定永久刪除「{selected_sheet_name}」？")
+            col_yes3, col_no3 = st.columns(2)
+            with col_yes3:
+                if st.button("🔴 確認刪除", key="btn_confirm_sheet"):
                     with st.spinner("刪除中..."):
                         sh.del_worksheet(worksheet)
                         st.success("工作表已刪除")
@@ -347,8 +353,7 @@ with tab_manage:
                         time.sleep(1)
                         st.cache_data.clear()
                         st.rerun()
-            
-            with col_cancel_3:
+            with col_no3:
                 if st.button("取消", key="btn_cancel_sheet"):
                     st.session_state.show_sheet_confirm = False
                     st.rerun()
