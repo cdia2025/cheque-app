@@ -1,3 +1,7 @@
 streamlit
 pandas
+gspread
+oauth2client
 st-gsheets-connection
+xlsxwriter
+openpyxl
