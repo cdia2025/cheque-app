@@ -15,14 +15,33 @@ REQUIRED_COLS = ['ID序號', '編號', '姓名(中文)', '姓名(英文)', '電�
 
 st.set_page_config(page_title="雲端實習津貼系統", layout="wide", page_icon="☁️")
 
-# ================= 核心：萬能 ID 清洗函式 =================
+# ================= 核心：萬能 ID 清洗與比對函式 =================
 def clean_id(val):
-    """強制將 ID 轉為乾淨文字 (去除 .0 和空白)"""
+    """
+    將 ID 強制轉為純文字，去除 .0 和空白，確保 100% 比對成功
+    """
     if val is None: return ""
     s = str(val).strip()
     if s == "": return ""
+    # 處理 Excel 匯入常見的 101.0
     if s.endswith(".0"): return s[:-2]
     return s
+
+def get_id_map(worksheet, id_col_index=1):
+    """
+    [關鍵技術] 建立 ID 對照表
+    回傳字典: {'101': 2, '102': 3} -> 代表 ID 101 在第 2 行
+    """
+    # 讀取整欄 ID (這是最省流量且最準確的方法)
+    raw_ids = worksheet.col_values(id_col_index)
+    id_map = {}
+    for idx, val in enumerate(raw_ids):
+        # idx 0 是第一行(標題)，資料從 idx 1 (第二行) 開始
+        # Google Sheet Row 是從 1 開始數，所以 Row = idx + 1
+        clean_val = clean_id(val)
+        if clean_val:
+            id_map[clean_val] = idx + 1
+    return id_map
 
 # ================= 連線設定 =================
 @st.cache_resource
@@ -38,7 +57,7 @@ def get_write_client():
 
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# ================= 核心函式 (快取) =================
+# ================= 資料讀取 (快取) =================
 @st.cache_data(ttl=600)
 def get_sheet_names_cached():
     try:
@@ -52,26 +71,25 @@ def fetch_data_cached(sheet_name):
     try:
         df = conn.read(spreadsheet=SPREADSHEET_URL, worksheet=sheet_name)
         if not df.empty:
-            # 清理欄位名稱 (去除前後空白)
             df.columns = df.columns.str.strip()
             
             # 智慧尋找 ID 欄位
-            id_col = None
+            target_col = None
             for c in df.columns:
-                if "ID" in c or "序號" in c:
-                    id_col = c
+                if 'ID' in c or '序號' in c:
+                    target_col = c
                     break
             
-            if id_col:
-                # 統一改名為標準 ID序號
-                df.rename(columns={id_col: 'ID序號'}, inplace=True)
-                df['ID序號'] = df['ID序號'].apply(clean_id)
+            if target_col:
+                df.rename(columns={target_col: 'ID序號'}, inplace=True)
             else:
-                # 若真的找不到，強行指定第一欄
+                # 沒找到就預設第一欄
                 if len(df.columns) > 0:
                     df.rename(columns={df.columns[0]: 'ID序號'}, inplace=True)
-                    df['ID序號'] = df['ID序號'].apply(clean_id)
 
+            # 清洗 ID
+            df['ID序號'] = df['ID序號'].apply(clean_id)
+            
             for col in SYSTEM_COLS:
                 if col not in df.columns: df[col] = ''
             df = df.fillna('')
@@ -99,12 +117,12 @@ def calculate_stats(df):
     }
 
 # ================= 主程式 =================
-st.title("☁️ 實習津貼管理系統 (V49 鎖定修復版)")
+st.title("☁️ 實習津貼管理系統 (V50 穩定核心版)")
 
-# Session State 初始化
+# Session State 初始化 (防止跳頁的關鍵)
 if 'df_main' not in st.session_state: st.session_state.df_main = None
-if 'saved_sheet_index' not in st.session_state: st.session_state.saved_sheet_index = 0 # 關鍵：記住 index
-if 'export_success_file' not in st.session_state: st.session_state.export_success_file = None
+if 'sheet_idx' not in st.session_state: st.session_state.sheet_idx = 0
+if 'export_file' not in st.session_state: st.session_state.export_file = None
 
 # --- 側邊欄 ---
 with st.sidebar:
@@ -114,37 +132,37 @@ with st.sidebar:
     
     sheet_names = get_sheet_names_cached()
     if not sheet_names:
-        st.error("讀取失敗，請檢查連線。")
+        st.error("連線失敗或無工作表")
         st.stop()
 
-    # 關鍵修正：強制使用 Session State 的 index，防止跳回 0
-    # 檢查 index 是否越界 (例如 sheet 被刪除)
-    if st.session_state.saved_sheet_index >= len(sheet_names):
-        st.session_state.saved_sheet_index = 0
+    # 使用 index 鎖定選擇
+    if st.session_state.sheet_idx >= len(sheet_names):
+        st.session_state.sheet_idx = 0
+        
+    def on_sheet_change():
+        # 當使用者手動切換時才更新 index
+        st.session_state.export_file = None # 切換時清空下載
         
     selected_sheet_name = st.selectbox(
         "📂 選擇工作表", 
         sheet_names, 
-        index=st.session_state.saved_sheet_index,
-        key="sheet_selector"
+        index=st.session_state.sheet_idx,
+        key="sheet_selector",
+        on_change=on_sheet_change
     )
-    
-    # 更新選取的 index
-    new_index = sheet_names.index(selected_sheet_name)
-    if st.session_state.saved_sheet_index != new_index:
-        st.session_state.saved_sheet_index = new_index
-        st.session_state.export_success_file = None # 切換表時清空下載
-        st.rerun()
+    # 更新 session index
+    st.session_state.sheet_idx = sheet_names.index(selected_sheet_name)
 
     if st.button("🔄 重新整理資料"):
         st.cache_data.clear()
-        st.session_state.export_success_file = None
+        st.session_state.export_file = None
         st.rerun()
 
 if not staff_name:
     st.warning("⚠️ 請先在左側輸入您的姓名。")
     st.stop()
 
+# 讀取資料
 df = fetch_data_cached(selected_sheet_name)
 
 # ================= 分頁 =================
@@ -162,8 +180,8 @@ tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
 # ---------------- Tab 1: 建立新表 ----------------
 with tab1:
     st.subheader("📥 上傳 Excel")
-    uploaded_file = st.file_uploader("選擇 Excel 檔案", type=['xlsx', 'xls'], key="upl")
-    new_sheet_name = st.text_input("輸入新工作表名稱", placeholder="2024_第一期", key="new_s_in")
+    uploaded_file = st.file_uploader("選擇 Excel", type=['xlsx', 'xls'], key="upl")
+    new_sheet_name = st.text_input("新工作表名稱", placeholder="2024_第一期", key="new_s_in")
     
     if st.button("🚀 建立並上傳", type="primary"):
         if uploaded_file and new_sheet_name:
@@ -189,26 +207,25 @@ with tab1:
                             gc = get_write_client()
                             sh = gc.open_by_url(SPREADSHEET_URL)
                             new_ws = sh.add_worksheet(title=new_sheet_name, rows=len(new_df)+50, cols=20)
-                            data_to_write = [new_df.columns.tolist()] + new_df.astype(str).values.tolist()
-                            new_ws.update(data_to_write)
+                            new_ws.update([new_df.columns.tolist()] + new_df.values.tolist())
                             
                             st.success(f"成功建立「{new_sheet_name}」！")
-                            # 自動切換到新表
+                            # 強制切換到新表
                             st.cache_data.clear()
-                            # 預測新表會在最後，或是重新讀取後再設
                             time.sleep(2)
+                            # 這裡不做 index 更新，讓它自然刷新，使用者手動選
                             st.rerun()
                     else: st.error("欄位不足")
                 except Exception as e: st.error(f"錯誤: {e}")
-        else: st.error("請填寫名稱並選擇檔案")
 
 # ---------------- Tab 2: 準備匯出 ----------------
 with tab2:
     st.subheader(f"📄 準備匯出 ({selected_sheet_name})")
     
-    if st.session_state.export_success_file:
-        st.success("✅ 匯出成功！請下載：")
-        st.download_button("📥 下載 MailMerge_Source.xlsx", st.session_state.export_success_file, "MailMerge_Source.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", type="primary")
+    # 下載按鈕 (防止消失)
+    if st.session_state.export_file:
+        st.success("✅ 匯出完成！請下載：")
+        st.download_button("📥 下載 MailMerge_Source.xlsx", st.session_state.export_file, "MailMerge_Source.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", type="primary")
         st.divider()
 
     if '反思會' in df.columns:
@@ -225,34 +242,21 @@ with tab2:
             if sel.empty: st.warning("❌ 未選取")
             else:
                 try:
-                    with st.spinner("更新中..."):
+                    with st.spinner("更新雲端中..."):
                         gc = get_write_client(); worksheet = gc.open_by_url(SPREADSHEET_URL).worksheet(selected_sheet_name)
-                        today = datetime.now().strftime("%Y-%m-%d")
+                        today = datetime.now().strftime("%Y-%m-%d"); head = worksheet.row_values(1)
                         
-                        # 智慧尋找欄位位置
-                        head = worksheet.row_values(1)
-                        # 找 ID 欄
+                        # 找 ID 欄位置
                         id_idx = 1
                         for i, h in enumerate(head):
-                            if "ID" in str(h) or "序號" in str(h):
-                                id_idx = i + 1
-                                break
+                            if "ID" in str(h) or "序號" in str(h): id_idx = i + 1; break
                         
-                        # 找系統欄
-                        if 'DocGeneratedDate' not in head: st.error("缺 DocGeneratedDate 欄位"); st.stop()
-                        c_doc = head.index('DocGeneratedDate')+1
-                        c_staff = head.index('ResponsibleStaff')+1
+                        if 'DocGeneratedDate' not in head: st.error("缺欄位"); st.stop()
+                        c_doc = head.index('DocGeneratedDate')+1; c_staff = head.index('ResponsibleStaff')+1
                         
-                        # 建立 ID 對照表 (ID -> Row Num)
-                        raw_ids = worksheet.col_values(id_idx)
-                        # 跳過標題列 (index 0 是標題，row 是 1)
-                        # 我們要建立一個 map: clean_id -> row_number
-                        id_map = {}
-                        for r_idx, val in enumerate(raw_ids):
-                            # r_idx 0 = row 1 (header), r_idx 1 = row 2 (data)
-                            if r_idx == 0: continue 
-                            id_map[clean_id(val)] = r_idx + 1
-
+                        # V50 核心: 建立 ID Map
+                        id_map = get_id_map(worksheet, id_idx)
+                        
                         prog = st.progress(0); ex_list = []
                         total = len(sel)
                         
@@ -263,17 +267,19 @@ with tab2:
                                 worksheet.update_cell(r_num, c_doc, today)
                                 worksheet.update_cell(r_num, c_staff, staff_name)
                                 rec = row.to_dict(); del rec['選取']; rec.update({'StaffName':staff_name, 'TodayDate':today}); ex_list.append(rec)
+                            else:
+                                st.toast(f"⚠️ 找不到 ID: {tid}", icon="❌")
                             prog.progress((i+1)/total)
                         
                     if ex_list:
                         out = io.BytesIO(); pd.DataFrame(ex_list).to_excel(out, index=False)
-                        st.session_state.export_success_file = out.getvalue()
-                        st.toast("匯出成功！")
+                        st.session_state.export_file = out.getvalue()
+                        st.success(f"成功處理 {len(ex_list)} 筆！")
                         time.sleep(1); st.cache_data.clear(); st.rerun()
-                    else: st.error("找不到對應 ID，請檢查雲端資料格式。")
+                    else: st.error("找不到 ID")
                 except Exception as e: st.error(f"錯誤: {e}")
 
-# ---------------- Tab 3: 待領取 ----------------
+# ---------------- Tab 3: 待領取 (修復退回) ----------------
 with tab3:
     st.subheader(f"🔵 待領取 ({selected_sheet_name})")
     
@@ -298,12 +304,7 @@ with tab3:
                                 if "ID" in str(h) or "序號" in str(h): id_idx = i + 1; break
                             
                             c_col = head.index('Collected')+1; c_date = head.index('CollectedDate')+1
-                            
-                            raw_ids = worksheet.col_values(id_idx)
-                            id_map = {}
-                            for r_idx, val in enumerate(raw_ids):
-                                if r_idx == 0: continue
-                                id_map[clean_id(val)] = r_idx + 1
+                            id_map = get_id_map(worksheet, id_idx)
                             
                             prog = st.progress(0)
                             for i, (idx, row) in enumerate(sel.iterrows()):
@@ -322,7 +323,7 @@ with tab3:
                 if not sel.empty:
                     if st.checkbox("確定退回？(清除日期)"):
                         try:
-                            with st.spinner("退回中..."):
+                            with st.spinner("正在退回..."):
                                 gc = get_write_client(); worksheet = gc.open_by_url(SPREADSHEET_URL).worksheet(selected_sheet_name)
                                 head = worksheet.row_values(1)
                                 
@@ -332,27 +333,34 @@ with tab3:
                                     
                                 c_doc = head.index('DocGeneratedDate')+1; c_staff = head.index('ResponsibleStaff')+1
                                 
-                                raw_ids = worksheet.col_values(id_idx)
-                                id_map = {}
-                                for r_idx, val in enumerate(raw_ids):
-                                    if r_idx == 0: continue
-                                    id_map[clean_id(val)] = r_idx + 1
+                                # V50 核心修復: 使用 ID Map
+                                id_map = get_id_map(worksheet, id_idx)
                                 
+                                count = 0
                                 for i, (idx, row) in enumerate(sel.iterrows()):
                                     tid = clean_id(row['ID序號'])
                                     if tid in id_map:
-                                        r_num = id_map[tid]
-                                        worksheet.update_cell(r_num, c_doc, "")
-                                        worksheet.update_cell(r_num, c_staff, "")
-                                st.success("已退回"); time.sleep(1); st.cache_data.clear(); st.rerun()
+                                        r = id_map[tid]
+                                        worksheet.update_cell(r, c_doc, "")
+                                        worksheet.update_cell(r, c_staff, "")
+                                        count += 1
+                                    else:
+                                        st.toast(f"⚠️ 找不到 ID {tid}", icon="❌")
+                                        
+                                if count > 0:
+                                    st.success(f"已退回 {count} 筆資料"); time.sleep(1); st.cache_data.clear(); st.rerun()
+                                else:
+                                    st.error("退回失敗：在雲端找不到任何對應的 ID。")
                         except Exception as e: st.error(f"錯誤: {e}")
 
-# ---------------- Tab 4: 已取票清單 ----------------
+# ---------------- Tab 4: 已取票清單 (修復撤銷) ----------------
 with tab4:
     st.subheader(f"🟢 已取票清單 ({selected_sheet_name})")
+    
     if 'Collected' in df.columns:
         mask_done = (df['Collected'] == 'Y')
         df_done = df[mask_done].copy()
+        
         if df_done.empty: st.info("無紀錄")
         else:
             df_done.insert(0, "選取", False)
@@ -372,23 +380,18 @@ with tab4:
                                     if "ID" in str(h) or "序號" in str(h): id_idx = i + 1; break
                                 
                                 c_col = head.index('Collected')+1; c_date = head.index('CollectedDate')+1
-                                
-                                raw_ids = worksheet.col_values(id_idx)
-                                id_map = {}
-                                for r_idx, val in enumerate(raw_ids):
-                                    if r_idx == 0: continue
-                                    id_map[clean_id(val)] = r_idx + 1
+                                id_map = get_id_map(worksheet, id_idx)
                                 
                                 for i, (idx, row) in enumerate(sel.iterrows()):
                                     tid = clean_id(row['ID序號'])
                                     if tid in id_map:
-                                        r_num = id_map[tid]
-                                        worksheet.update_cell(r_num, c_col, "")
-                                        worksheet.update_cell(r_num, c_date, "")
+                                        r = id_map[tid]
+                                        worksheet.update_cell(r, c_col, "")
+                                        worksheet.update_cell(r, c_date, "")
                                 st.success("已撤銷"); time.sleep(1); st.cache_data.clear(); st.rerun()
                         except Exception as e: st.error(f"錯誤: {e}")
 
-# ---------------- Tab 5: 不符名單 ----------------
+# ---------------- Tab 5: 不符名單 (修復放行) ----------------
 with tab5:
     st.subheader(f"🚫 不符資格 ({selected_sheet_name})")
     if '反思會' in df.columns:
@@ -411,19 +414,14 @@ with tab5:
                                 if "ID" in str(h) or "序號" in str(h): id_idx = i + 1; break
                             
                             c1 = head.index('反思會')+1 if '反思會' in head else 7; c2 = head.index('反思表')+1 if '反思表' in head else 8
-                            
-                            raw_ids = worksheet.col_values(id_idx)
-                            id_map = {}
-                            for r_idx, val in enumerate(raw_ids):
-                                if r_idx == 0: continue
-                                id_map[clean_id(val)] = r_idx + 1
+                            id_map = get_id_map(worksheet, id_idx)
                             
                             prog = st.progress(0)
                             for i, (idx, row) in enumerate(sel.iterrows()):
                                 tid = clean_id(row['ID序號'])
                                 if tid in id_map:
-                                    r_num = id_map[tid]
-                                    worksheet.update_cell(r_num, c1, 'Y'); worksheet.update_cell(r_num, c2, 'Y')
+                                    r = id_map[tid]
+                                    worksheet.update_cell(r, c1, 'Y'); worksheet.update_cell(r, c2, 'Y')
                                 prog.progress((i+1)/len(sel))
                             st.success("已放行"); time.sleep(1); st.cache_data.clear(); st.rerun()
                         except Exception as e: st.error(f"錯誤: {e}")
@@ -478,7 +476,7 @@ with tab8:
     st.subheader("📊 統計")
     curr_stats = calculate_stats(df)
     c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("總人數", curr_stats['總人數'])
+    c1.metric("總數", curr_stats['總人數'])
     c2.metric("待匯出", curr_stats['待匯出'], delta_color="inverse")
     c3.metric("待領取", curr_stats['待領取'], delta_color="normal")
     c4.metric("已完成", curr_stats['已完成'])
