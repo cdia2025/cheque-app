@@ -239,7 +239,7 @@ with tab2:
     with col2:
         if st.button("✅ 全選", key="select_all_tab2"):
             df_show = select_all_rows(df_show, "選取", True)
-        if st.button("❌ 取消全選", key="deselect_all_tab2"):
+        if st.button("❌ 全部取消", key="deselect_all_tab2"):
             df_show = select_all_rows(df_show, "選取", False)
     
     df_show = safe_insert_column(df_show, 0, "選取", False)
@@ -287,7 +287,7 @@ with tab3:
     with col2:
         if st.button("✅ 全選", key="select_all_tab3"):
             df_show = select_all_rows(df_show, "確認", True)
-        if st.button("❌ 取消全選", key="deselect_all_tab3"):
+        if st.button("❌ 全部取消", key="deselect_all_tab3"):
             df_show = select_all_rows(df_show, "確認", False)
     
     df_show = safe_insert_column(df_show, 0, "確認", False)
@@ -329,7 +329,7 @@ with tab4:
     with col2:
         if st.button("✅ 全選", key="select_all_tab4"):
             df_show = select_all_rows(df_show, "撤銷", True)
-        if st.button("❌ 取消全選", key="deselect_all_tab4"):
+        if st.button("❌ 全部取消", key="deselect_all_tab4"):
             df_show = select_all_rows(df_show, "撤銷", False)
     
     df_show = safe_insert_column(df_show, 0, "撤銷", False)
@@ -360,7 +360,7 @@ with tab5:
     with col2:
         if st.button("✅ 全選", key="select_all_tab5"):
             df_show = select_all_rows(df_show, "放行", True)
-        if st.button("❌ 取消全選", key="deselect_all_tab5"):
+        if st.button("❌ 全部取消", key="deselect_all_tab5"):
             df_show = select_all_rows(df_show, "放行", False)
     
     df_show = safe_insert_column(df_show, 0, "放行", False)
