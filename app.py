@@ -109,10 +109,11 @@ if 'current_sheet' not in st.session_state: st.session_state.current_sheet = Non
 if 'df_main' not in st.session_state: st.session_state.df_main = None
 if 'export_file' not in st.session_state: st.session_state.export_file = None
 if 'staff_name' not in st.session_state: st.session_state.staff_name = ""
+if 'show_confirm_revert' not in st.session_state: st.session_state.show_confirm_revert = False
 
 # ================= 側邊欄 =================
 with st.sidebar:
-    st.header("🎛️ 控制台")
+    st.header("LayoutPanel")
     staff_name = st.text_input("👤 負責職員姓名", value=st.session_state.get('staff_name', ''), key="staff_name_input")
     
     # 更新session state
@@ -279,14 +280,22 @@ with tab3:
                 save_data(df, selected_sheet)
                 st.rerun()
     with c2:
+        # 先顯示按鈕，然後根據按鈕狀態決定是否顯示確認框
         if st.button("↩️ 退回至準備匯出", key="revert_to_export_btn"):
-            ids = edited[edited["確認"]]['ID序號'].tolist()
-            if ids:
-                if st.checkbox("確定退回？", key="confirm_revert_checkbox"):
+            st.session_state.show_confirm_revert = True
+        
+        if st.session_state.show_confirm_revert:
+            if st.checkbox("確定退回？", key="confirm_revert_checkbox"):
+                ids = edited[edited["確認"]]['ID序號'].tolist()
+                if ids:
                     df.loc[df['ID序號'].isin(ids), 'DocGeneratedDate'] = ''
                     df.loc[df['ID序號'].isin(ids), 'ResponsibleStaff'] = ''
                     save_data(df, selected_sheet)
+                    st.session_state.show_confirm_revert = False
                     st.rerun()
+            else:
+                # 如果取消勾選，則重置狀態
+                st.session_state.show_confirm_revert = False
 
 # ---------------- TAB 4: 已取票 ----------------
 with tab4:
@@ -303,14 +312,25 @@ with tab4:
         key="editor_tab4"
     )
     
+    # 類似的邏輯應用到撤銷功能
+    if 'show_confirm_revert_collected' not in st.session_state:
+        st.session_state.show_confirm_revert_collected = False
+    
     if st.button("↩️ 撤銷領取", key="revert_collected_btn"):
-        ids = edited[edited["撤銷"]]['ID序號'].tolist()
-        if ids:
-            if st.checkbox("確定撤銷？", key="confirm_revert_collected_checkbox"):
+        st.session_state.show_confirm_revert_collected = True
+    
+    if st.session_state.show_confirm_revert_collected:
+        if st.checkbox("確定撤銷？", key="confirm_revert_collected_checkbox"):
+            ids = edited[edited["撤銷"]]['ID序號'].tolist()
+            if ids:
                 df.loc[df['ID序號'].isin(ids), 'Collected'] = ''
                 df.loc[df['ID序號'].isin(ids), 'CollectedDate'] = ''
                 save_data(df, selected_sheet)
+                st.session_state.show_confirm_revert_collected = False
                 st.rerun()
+        else:
+            # 如果取消勾選，則重置狀態
+            st.session_state.show_confirm_revert_collected = False
 
 # ---------------- TAB 5: 不符名單 ----------------
 with tab5:
@@ -327,14 +347,25 @@ with tab5:
         key="editor_tab5"
     )
     
+    # 類似的邏輯應用到強制放行功能
+    if 'show_confirm_approve' not in st.session_state:
+        st.session_state.show_confirm_approve = False
+    
     if st.button("➡️ 強制放行", key="force_approve_btn"):
-        ids = edited[edited["放行"]]['ID序號'].tolist()
-        if ids:
-            if st.checkbox("確認放行？", key="confirm_approve_checkbox"):
+        st.session_state.show_confirm_approve = True
+    
+    if st.session_state.show_confirm_approve:
+        if st.checkbox("確認放行？", key="confirm_approve_checkbox"):
+            ids = edited[edited["放行"]]['ID序號'].tolist()
+            if ids:
                 df.loc[df['ID序號'].isin(ids), '反思會'] = 'Y'
                 df.loc[df['ID序號'].isin(ids), '反思表'] = 'Y'
                 save_data(df, selected_sheet)
+                st.session_state.show_confirm_approve = False
                 st.rerun()
+        else:
+            # 如果取消勾選，則重置狀態
+            st.session_state.show_confirm_approve = False
 
 # ---------------- TAB 6: 修改資料 ----------------
 with tab6:
