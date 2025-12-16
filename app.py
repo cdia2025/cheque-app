@@ -104,21 +104,6 @@ def save_data(df, sheet_name):
             st.error(f"儲存失敗: {e}")
         return False
 
-def select_all_rows(df, selection_column, select=True):
-    """全選或取消全選指定欄位"""
-    df_copy = df.copy()
-    df_copy[selection_column] = select
-    return df_copy
-
-def safe_insert_column(df, position, col_name, default_value):
-    """安全地插入列，如果列已存在則跳過"""
-    if col_name not in df.columns:
-        df.insert(position, col_name, default_value)
-    else:
-        # 如果列已存在，確保其值正確
-        df[col_name] = default_value
-    return df
-
 # ================= Session State =================
 if 'current_sheet' not in st.session_state: st.session_state.current_sheet = None
 if 'df_main' not in st.session_state: st.session_state.df_main = None
@@ -234,15 +219,7 @@ with tab2:
     mask = (df['反思會'].str.upper() == 'Y') & (df['反思表'].str.upper() == 'Y') & (df['DocGeneratedDate'] == '')
     df_show = df[mask].copy()
     
-    # 添加批量選取按鈕
-    col1, col2 = st.columns([3, 1])
-    with col2:
-        if st.button("✅ 全選", key="select_all_tab2"):
-            df_show = select_all_rows(df_show, "選取", True)
-        if st.button("❌ 全部取消", key="deselect_all_tab2"):
-            df_show = select_all_rows(df_show, "選取", False)
-    
-    df_show = safe_insert_column(df_show, 0, "選取", False)
+    df_show.insert(0, "選取", False)
     edited = st.data_editor(
         df_show, 
         column_config={"選取": st.column_config.CheckboxColumn(required=True)},
@@ -254,7 +231,7 @@ with tab2:
     if st.button("📤 匯出 & 更新狀態", key="export_status_btn"):
         selected = edited[edited["選取"]]
         if selected.empty:
-            st.warning("未選取任何項目")
+            st.warning("未選取")
         else:
             today = datetime.now().strftime("%Y-%m-%d")
             ids = selected['ID序號'].tolist()
@@ -282,15 +259,7 @@ with tab3:
     mask = (df['DocGeneratedDate'] != '') & (df['Collected'] != 'Y')
     df_show = df[mask].copy()
     
-    # 添加批量選取按鈕
-    col1, col2 = st.columns([3, 1])
-    with col2:
-        if st.button("✅ 全選", key="select_all_tab3"):
-            df_show = select_all_rows(df_show, "確認", True)
-        if st.button("❌ 全部取消", key="deselect_all_tab3"):
-            df_show = select_all_rows(df_show, "確認", False)
-    
-    df_show = safe_insert_column(df_show, 0, "確認", False)
+    df_show.insert(0, "確認", False)
     edited = st.data_editor(
         df_show, 
         column_config={"確認": st.column_config.CheckboxColumn(required=True)},
@@ -324,15 +293,7 @@ with tab4:
     mask = (df['Collected'] == 'Y')
     df_show = df[mask].copy()
     
-    # 添加批量選取按鈕
-    col1, col2 = st.columns([3, 1])
-    with col2:
-        if st.button("✅ 全選", key="select_all_tab4"):
-            df_show = select_all_rows(df_show, "撤銷", True)
-        if st.button("❌ 全部取消", key="deselect_all_tab4"):
-            df_show = select_all_rows(df_show, "撤銷", False)
-    
-    df_show = safe_insert_column(df_show, 0, "撤銷", False)
+    df_show.insert(0, "撤銷", False)
     edited = st.data_editor(
         df_show, 
         column_config={"撤銷": st.column_config.CheckboxColumn(required=True)},
@@ -355,15 +316,7 @@ with tab5:
     mask = ((df['反思會'].str.upper() != 'Y') | (df['反思表'].str.upper() != 'Y')) & (df['DocGeneratedDate'] == '')
     df_show = df[mask].copy()
     
-    # 添加批量選取按鈕
-    col1, col2 = st.columns([3, 1])
-    with col2:
-        if st.button("✅ 全選", key="select_all_tab5"):
-            df_show = select_all_rows(df_show, "放行", True)
-        if st.button("❌ 全部取消", key="deselect_all_tab5"):
-            df_show = select_all_rows(df_show, "放行", False)
-    
-    df_show = safe_insert_column(df_show, 0, "放行", False)
+    df_show.insert(0, "放行", False)
     edited = st.data_editor(
         df_show, 
         column_config={"放行": st.column_config.CheckboxColumn(required=True)},
