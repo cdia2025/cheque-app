@@ -108,11 +108,16 @@ def save_data(df, sheet_name):
 if 'current_sheet' not in st.session_state: st.session_state.current_sheet = None
 if 'df_main' not in st.session_state: st.session_state.df_main = None
 if 'export_file' not in st.session_state: st.session_state.export_file = None
+if 'staff_name' not in st.session_state: st.session_state.staff_name = ""
 
 # ================= 側邊欄 =================
 with st.sidebar:
     st.header("🎛️ 控制台")
-    staff_name = st.text_input("👤 負責職員姓名", key="staff_name")
+    staff_name = st.text_input("👤 負責職員姓名", value=st.session_state.get('staff_name', ''), key="staff_name_input")
+    
+    # 更新session state
+    if staff_name:
+        st.session_state.staff_name = staff_name
     
     st.divider()
     
@@ -159,10 +164,10 @@ tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
 # ---------------- TAB 1: 建立新表 ----------------
 with tab1:
     st.subheader("上傳 Excel 並建立新分頁")
-    up_file = st.file_uploader("選擇 Excel", type=["xlsx", "xls"])
-    new_name = st.text_input("新工作表名稱 (如: 2024_05)")
+    up_file = st.file_uploader("選擇 Excel", type=["xlsx", "xls"], key="upload_tab1")
+    new_name = st.text_input("新工作表名稱 (如: 2024_05)", key="new_name_tab1")
     
-    if st.button("🚀 建立並上傳", type="primary"):
+    if st.button("🚀 建立並上傳", type="primary", key="create_upload_btn"):
         if up_file and new_name:
             if new_name in sheet_names:
                 st.error("名稱重複！")
@@ -223,7 +228,7 @@ with tab2:
         key="editor_tab2"
     )
     
-    if st.button("📤 匯出 & 更新狀態"):
+    if st.button("📤 匯出 & 更新狀態", key="export_status_btn"):
         selected = edited[edited["選取"]]
         if selected.empty:
             st.warning("未選取")
@@ -265,7 +270,7 @@ with tab3:
     
     c1, c2 = st.columns(2)
     with c1:
-        if st.button("✅ 確認已取票", type="primary"):
+        if st.button("✅ 確認已取票", type="primary", key="confirm_collected_btn"):
             ids = edited[edited["確認"]]['ID序號'].tolist()
             if ids:
                 now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -274,10 +279,10 @@ with tab3:
                 save_data(df, selected_sheet)
                 st.rerun()
     with c2:
-        if st.button("↩️ 退回至準備匯出"):
+        if st.button("↩️ 退回至準備匯出", key="revert_to_export_btn"):
             ids = edited[edited["確認"]]['ID序號'].tolist()
             if ids:
-                if st.checkbox("確定退回？"):
+                if st.checkbox("確定退回？", key="confirm_revert_checkbox"):
                     df.loc[df['ID序號'].isin(ids), 'DocGeneratedDate'] = ''
                     df.loc[df['ID序號'].isin(ids), 'ResponsibleStaff'] = ''
                     save_data(df, selected_sheet)
@@ -298,10 +303,10 @@ with tab4:
         key="editor_tab4"
     )
     
-    if st.button("↩️ 撤銷領取"):
+    if st.button("↩️ 撤銷領取", key="revert_collected_btn"):
         ids = edited[edited["撤銷"]]['ID序號'].tolist()
         if ids:
-            if st.checkbox("確定撤銷？"):
+            if st.checkbox("確定撤銷？", key="confirm_revert_collected_checkbox"):
                 df.loc[df['ID序號'].isin(ids), 'Collected'] = ''
                 df.loc[df['ID序號'].isin(ids), 'CollectedDate'] = ''
                 save_data(df, selected_sheet)
@@ -322,10 +327,10 @@ with tab5:
         key="editor_tab5"
     )
     
-    if st.button("➡️ 強制放行"):
+    if st.button("➡️ 強制放行", key="force_approve_btn"):
         ids = edited[edited["放行"]]['ID序號'].tolist()
         if ids:
-            if st.checkbox("確認放行？"):
+            if st.checkbox("確認放行？", key="confirm_approve_checkbox"):
                 df.loc[df['ID序號'].isin(ids), '反思會'] = 'Y'
                 df.loc[df['ID序號'].isin(ids), '反思表'] = 'Y'
                 save_data(df, selected_sheet)
@@ -350,6 +355,6 @@ with tab6:
         key="editor_main"
     )
     
-    if st.button("💾 儲存全部修改", type="primary"):
+    if st.button("💾 儲存全部修改", type="primary", key="save_all_changes_btn"):
         save_data(edited_df, selected_sheet)
         st.rerun()
