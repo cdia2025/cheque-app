@@ -166,6 +166,41 @@ def calculate_statistics(df):
         'not_qualified': not_qualified
     }
 
+def search_and_select_ids(df, id_list, status_filter=None):
+    """根據ID列表搜索並返回包含選取列的DataFrame"""
+    # 過濾特定狀態（如果提供了過濾條件）
+    if status_filter == 'ready_for_export':
+        filtered_df = df[
+            (df['反思會'].str.upper() == 'Y') & 
+            (df['反思表'].str.upper() == 'Y') & 
+            (df['DocGeneratedDate'] == '')
+        ]
+    elif status_filter == 'pending_collection':
+        filtered_df = df[
+            (df['DocGeneratedDate'] != '') & 
+            (df['Collected'] != 'Y')
+        ]
+    elif status_filter == 'collected':
+        filtered_df = df[df['Collected'] == 'Y']
+    elif status_filter == 'not_qualified':
+        filtered_df = df[
+            ((df['反思會'].str.upper() != 'Y') | (df['反思表'].str.upper() != 'Y')) & 
+            (df['DocGeneratedDate'] == '')
+        ]
+    else:
+        filtered_df = df.copy()
+    
+    # 找到匹配的ID
+    matching_ids = [id_num for id_num in id_list if id_num in filtered_df['ID序號'].values]
+    
+    # 篩選匹配的記錄
+    result_df = filtered_df[filtered_df['ID序號'].isin(matching_ids)].copy()
+    
+    # 添加選取列
+    result_df.insert(0, "選取", True)  # 預設全部選中匹配的ID
+    
+    return result_df, matching_ids
+
 # ================= Session State =================
 if 'current_sheet' not in st.session_state: st.session_state.current_sheet = None
 if 'df_main' not in st.session_state: st.session_state.df_main = None
@@ -174,6 +209,9 @@ if 'staff_name' not in st.session_state: st.session_state.staff_name = ""
 if 'show_delete_confirmation' not in st.session_state: 
     st.session_state.show_delete_confirmation = False
     st.session_state.delete_sheet_name = ""
+if 'search_ids' not in st.session_state: st.session_state.search_ids = ""
+if 'search_results' not in st.session_state: st.session_state.search_results = None
+if 'selected_search_tab' not in st.session_state: st.session_state.selected_search_tab = "所有資料"
 
 # ================= 側邊欄 =================
 with st.sidebar:
@@ -233,6 +271,59 @@ with st.sidebar:
                 st.session_state.delete_sheet_name = ""
                 st.rerun()
 
+    # 搜索功能
+    st.divider()
+    st.subheader("🔍 搜索功能")
+    
+    # 輸入ID號碼
+    st.session_state.search_ids = st.text_area(
+        "輸入ID號碼（每行一個）", 
+        value=st.session_state.search_ids,
+        help="請在下方選擇搜索範圍，然後輸入ID號碼，每行一個",
+        height=100
+    )
+    
+    # 選擇搜索範圍
+    search_scope_options = [
+        "所有資料", 
+        "準備匯出", 
+        "待領取", 
+        "已取票", 
+        "不符資格"
+    ]
+    st.session_state.selected_search_tab = st.selectbox(
+        "搜索範圍", 
+        options=search_scope_options,
+        index=search_scope_options.index(st.session_state.selected_search_tab)
+    )
+    
+    # 搜索按鈕
+    if st.button("🔍 搜索並選取"):
+        if st.session_state.search_ids.strip():
+            id_list = [id_num.strip() for id_num in st.session_state.search_ids.split('\n') if id_num.strip()]
+            
+            # 根據選擇的範圍確定過濾條件
+            status_filter = None
+            if st.session_state.selected_search_tab == "準備匯出":
+                status_filter = 'ready_for_export'
+            elif st.session_state.selected_search_tab == "待領取":
+                status_filter = 'pending_collection'
+            elif st.session_state.selected_search_tab == "已取票":
+                status_filter = 'collected'
+            elif st.session_state.selected_search_tab == "不符資格":
+                status_filter = 'not_qualified'
+            
+            # 執行搜索
+            results_df, found_ids = search_and_select_ids(df, id_list, status_filter)
+            st.session_state.search_results = results_df
+            
+            if results_df.empty:
+                st.warning("沒有找到匹配的ID")
+            else:
+                st.success(f"找到 {len(results_df)} 筆匹配記錄")
+        else:
+            st.warning("請輸入至少一個ID號碼")
+
     if st.button("🔄 強制重新整理"):
         st.cache_data.clear()
         st.session_state.df_main = load_data(selected_sheet)
@@ -267,6 +358,42 @@ with col5:
 
 # 分隔線
 st.divider()
+
+# ================= 搜索結果顯示 =================
+if st.session_state.search_results is not None and not st.session_state.search_results.empty:
+    st.subheader("🔍 搜索結果")
+    st.info(f"在「{st.session_state.selected_search_tab}」中找到 {len(st.session_state.search_results)} 筆記錄")
+    
+    # 顯示搜索結果的編輯器
+    edited_search_results = st.data_editor(
+        st.session_state.search_results,
+        column_config={"選取": st.column_config.CheckboxColumn(required=True)},
+        disabled=[c for c in st.session_state.search_results.columns if c != "選取"],
+        hide_index=True,
+        key="search_results_editor"
+    )
+    
+    # 操作按鈕
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        if st.button("✅ 全部選取", key="select_all_search"):
+            # 更新 session state 中的搜索結果
+            st.session_state.search_results['選取'] = True
+            st.rerun()
+    
+    with col2:
+        if st.button("❌ 全部取消", key="deselect_all_search"):
+            # 更新 session state 中的搜索結果
+            st.session_state.search_results['選取'] = False
+            st.rerun()
+    
+    with col3:
+        if st.button("🧹 清除結果", key="clear_search_results"):
+            st.session_state.search_results = None
+            st.rerun()
+    
+    st.divider()
 
 # ================= 主分頁 =================
 tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
