@@ -199,6 +199,7 @@ def search_and_select_ids(df, id_list, status_filter=None):
     # 添加選取列
     result_df.insert(0, "選取", True)  # 預設全部選中匹配的ID
     
+    # 返回結果DataFrame和匹配的ID列表
     return result_df, matching_ids
 
 # ================= Session State =================
