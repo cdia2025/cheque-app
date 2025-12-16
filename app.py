@@ -110,6 +110,15 @@ def select_all_rows(df, selection_column, select=True):
     df_copy[selection_column] = select
     return df_copy
 
+def safe_insert_column(df, position, col_name, default_value):
+    """安全地插入列，如果列已存在則跳過"""
+    if col_name not in df.columns:
+        df.insert(position, col_name, default_value)
+    else:
+        # 如果列已存在，確保其值正確
+        df[col_name] = default_value
+    return df
+
 # ================= Session State =================
 if 'current_sheet' not in st.session_state: st.session_state.current_sheet = None
 if 'df_main' not in st.session_state: st.session_state.df_main = None
@@ -233,7 +242,7 @@ with tab2:
         if st.button("❌ 取消全選", key="deselect_all_tab2"):
             df_show = select_all_rows(df_show, "選取", False)
     
-    df_show.insert(0, "選取", False)
+    df_show = safe_insert_column(df_show, 0, "選取", False)
     edited = st.data_editor(
         df_show, 
         column_config={"選取": st.column_config.CheckboxColumn(required=True)},
@@ -281,7 +290,7 @@ with tab3:
         if st.button("❌ 取消全選", key="deselect_all_tab3"):
             df_show = select_all_rows(df_show, "確認", False)
     
-    df_show.insert(0, "確認", False)
+    df_show = safe_insert_column(df_show, 0, "確認", False)
     edited = st.data_editor(
         df_show, 
         column_config={"確認": st.column_config.CheckboxColumn(required=True)},
@@ -323,7 +332,7 @@ with tab4:
         if st.button("❌ 取消全選", key="deselect_all_tab4"):
             df_show = select_all_rows(df_show, "撤銷", False)
     
-    df_show.insert(0, "撤銷", False)
+    df_show = safe_insert_column(df_show, 0, "撤銷", False)
     edited = st.data_editor(
         df_show, 
         column_config={"撤銷": st.column_config.CheckboxColumn(required=True)},
@@ -354,7 +363,7 @@ with tab5:
         if st.button("❌ 取消全選", key="deselect_all_tab5"):
             df_show = select_all_rows(df_show, "放行", False)
     
-    df_show.insert(0, "放行", False)
+    df_show = safe_insert_column(df_show, 0, "放行", False)
     edited = st.data_editor(
         df_show, 
         column_config={"放行": st.column_config.CheckboxColumn(required=True)},
