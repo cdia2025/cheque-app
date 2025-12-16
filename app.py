@@ -6,6 +6,7 @@ from google.oauth2.service_account import Credentials
 from datetime import datetime
 import io
 import time
+import re # 新增：用於處理正規表達式分割 ID
 
 # ================= 設定區 =================
 # 請確認這裡是您的 Google Sheet 網址
@@ -18,14 +19,14 @@ REQUIRED_COLS = [
     'Collected', 'DocGeneratedDate', 'CollectedDate', 'ResponsibleStaff'
 ]
 
-st.set_page_config(page_title="雲端實習津貼系統 (V53 連線修復版)", layout="wide", page_icon="🛡️")
+st.set_page_config(page_title="雲端實習津貼系統 (V54 批量選取版)", layout="wide", page_icon="🛡️")
 
 # ================= 連線設定 =================
 
 # 1. 資料讀寫連線 (使用 Streamlit 官方套件)
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# 2. 結構管理連線 (使用原生 gspread，修復 open_by_url 錯誤)
+# 2. 結構管理連線 (使用原生 gspread)
 @st.cache_resource
 def get_manager_client():
     """建立一個原生的 gspread 客戶端，用於管理工作表結構"""
@@ -109,14 +110,9 @@ def delete_worksheet(worksheet_name):
     try:
         client = get_manager_client()
         sh = client.open_by_url(SPREADSHEET_URL)
-        
-        # 獲取要刪除的工作表
         ws = sh.worksheet(worksheet_name)
-        
-        # 刪除工作表
         sh.del_worksheet(ws)
         
-        # 更新 session state
         if st.session_state.current_sheet == worksheet_name:
             sheet_names = get_all_sheet_names()
             if sheet_names:
@@ -135,28 +131,10 @@ def delete_worksheet(worksheet_name):
 def calculate_statistics(df):
     """計算各類別的統計數字"""
     total_count = len(df)
-    
-    # 準備匯出：反思會=Y 且 反思表=Y 且 DocGeneratedDate 為空
-    ready_for_export = len(df[
-        (df['反思會'].str.upper() == 'Y') & 
-        (df['反思表'].str.upper() == 'Y') & 
-        (df['DocGeneratedDate'] == '')
-    ])
-    
-    # 待領取：DocGeneratedDate 不為空 且 Collected != 'Y'
-    pending_collection = len(df[
-        (df['DocGeneratedDate'] != '') & 
-        (df['Collected'] != 'Y')
-    ])
-    
-    # 已取票：Collected == 'Y'
+    ready_for_export = len(df[(df['反思會'].str.upper() == 'Y') & (df['反思表'].str.upper() == 'Y') & (df['DocGeneratedDate'] == '')])
+    pending_collection = len(df[(df['DocGeneratedDate'] != '') & (df['Collected'] != 'Y')])
     collected = len(df[df['Collected'] == 'Y'])
-    
-    # 不符資格：反思會!=Y 或 反思表!=Y 且 DocGeneratedDate 為空
-    not_qualified = len(df[
-        ((df['反思會'].str.upper() != 'Y') | (df['反思表'].str.upper() != 'Y')) & 
-        (df['DocGeneratedDate'] == '')
-    ])
+    not_qualified = len(df[((df['反思會'].str.upper() != 'Y') | (df['反思表'].str.upper() != 'Y')) & (df['DocGeneratedDate'] == '')])
     
     return {
         'total': total_count,
@@ -165,6 +143,54 @@ def calculate_statistics(df):
         'collected': collected,
         'not_qualified': not_qualified
     }
+
+def process_batch_selection(df_target, check_col_name, key_suffix):
+    """
+    處理批量選取邏輯的 UI 與後端處理
+    df_target: 目標 DataFrame
+    check_col_name: 核取方塊的欄位名稱 (如 '選取', '確認')
+    key_suffix: 元件 key 的後綴，避免重複
+    
+    Returns: 處理過後的 DataFrame (已更新 check_col_name 狀態)
+    """
+    # 預設該欄位為 False (如果還沒有的話)
+    if check_col_name not in df_target.columns:
+        df_target.insert(0, check_col_name, False)
+
+    with st.expander("⚡ 批量選取工具 (輸入 ID 或 全選)", expanded=False):
+        c1, c2 = st.columns([3, 1])
+        with c1:
+            batch_text = st.text_area(
+                "貼上 ID (支援 Excel 複製貼上、逗號或空白分隔)", 
+                height=100, 
+                key=f"batch_txt_{key_suffix}",
+                placeholder="例如：\n112001\n112005\n112008"
+            )
+        with c2:
+            st.write("快捷鍵")
+            if st.button("✅ 全選列表", key=f"all_{key_suffix}"):
+                df_target[check_col_name] = True
+            
+            if st.button("❌ 全部取消", key=f"clear_{key_suffix}"):
+                df_target[check_col_name] = False
+
+        # 處理文字輸入的 ID
+        if batch_text:
+            # 使用正規表達式分割 (支援逗號, 空白, tab, 換行)
+            ids_input = re.split(r'[,\s\n\t]+', batch_text)
+            # 去除空字串
+            ids_input = [x.strip() for x in ids_input if x.strip()]
+            
+            if ids_input:
+                # 將有匹配到的 ID 的選取狀態設為 True
+                mask = df_target['ID序號'].isin(ids_input)
+                df_target.loc[mask, check_col_name] = True
+                
+                # 顯示匹配結果提示
+                match_count = mask.sum()
+                st.caption(f"已選取 {match_count} 筆符合的資料 (輸入了 {len(ids_input)} 個 ID)")
+
+    return df_target
 
 # ================= Session State =================
 if 'current_sheet' not in st.session_state: st.session_state.current_sheet = None
@@ -180,36 +206,29 @@ with st.sidebar:
     st.header("LayoutPanel")
     staff_name = st.text_input("👤 負責職員姓名", value=st.session_state.get('staff_name', ''), key="staff_name_input")
     
-    # 更新session state
     if staff_name:
         st.session_state.staff_name = staff_name
     
     st.divider()
     
-    # 1. 取得工作表清單
     sheet_names = get_all_sheet_names()
     if not sheet_names:
         st.stop()
         
-    # 2. 選擇工作表 (鎖定 Index)
     if st.session_state.current_sheet not in sheet_names:
         st.session_state.current_sheet = sheet_names[0]
         
     idx = sheet_names.index(st.session_state.current_sheet)
     selected_sheet = st.selectbox("📂 選擇工作表", sheet_names, index=idx)
     
-    # 切換檢測
     if selected_sheet != st.session_state.current_sheet:
         st.session_state.current_sheet = selected_sheet
         st.session_state.df_main = load_data(selected_sheet)
         st.session_state.export_file = None
         st.rerun()
 
-    # 新增刪除工作表功能
     st.divider()
     st.subheader("🗑️ 管理工作表")
-    
-    # 刪除工作表選擇器
     delete_sheet = st.selectbox("選擇要刪除的工作表", [""] + [name for name in sheet_names if name != selected_sheet])
     
     if delete_sheet:
@@ -217,7 +236,6 @@ with st.sidebar:
             st.session_state.show_delete_confirmation = True
             st.session_state.delete_sheet_name = delete_sheet
     
-    # 顯示刪除確認
     if st.session_state.show_delete_confirmation:
         st.warning(f"⚠️ 確定要永久刪除工作表 '{st.session_state.delete_sheet_name}' 嗎？此操作無法還原！")
         col1, col2 = st.columns(2)
@@ -251,21 +269,13 @@ st.title(f"☁️ 管理：{selected_sheet}")
 
 # ================= 統計資料顯示 =================
 stats = calculate_statistics(df)
-
-# 顯示統計卡片
 col1, col2, col3, col4, col5 = st.columns(5)
-with col1:
-    st.metric(label="📊 總人數", value=stats['total'])
-with col2:
-    st.metric(label="📄 準備匯出", value=stats['ready_for_export'], delta_color="off")
-with col3:
-    st.metric(label="🔵 待領取", value=stats['pending_collection'], delta_color="off")
-with col4:
-    st.metric(label="🟢 已取票", value=stats['collected'], delta_color="off")
-with col5:
-    st.metric(label="🚫 不符", value=stats['not_qualified'], delta_color="off")
+with col1: st.metric(label="📊 總人數", value=stats['total'])
+with col2: st.metric(label="📄 準備匯出", value=stats['ready_for_export'], delta_color="off")
+with col3: st.metric(label="🔵 待領取", value=stats['pending_collection'], delta_color="off")
+with col4: st.metric(label="🟢 已取票", value=stats['collected'], delta_color="off")
+with col5: st.metric(label="🚫 不符", value=stats['not_qualified'], delta_color="off")
 
-# 分隔線
 st.divider()
 
 # ================= 主分頁 =================
@@ -287,7 +297,6 @@ with tab1:
                 try:
                     new_df = pd.read_excel(up_file)
                     if len(new_df.columns) >= 9:
-                        # 欄位對應
                         mapping = {
                             new_df.columns[0]: 'ID序號', new_df.columns[1]: '編號',
                             new_df.columns[2]: '姓名(中文)', new_df.columns[3]: '姓名(英文)',
@@ -299,14 +308,11 @@ with tab1:
                         for c in ['Collected', 'DocGeneratedDate', 'CollectedDate', 'ResponsibleStaff']:
                             new_df[c] = ""
                         
-                        # 使用 manager client 建立
                         client = get_manager_client()
                         sh = client.open_by_url(SPREADSHEET_URL)
                         ws = sh.add_worksheet(title=new_name, rows=len(new_df)+20, cols=15)
                         
-                        # 寫入資料
                         clean_new = clean_dataframe(new_df)
-                        # gspread update 需要 list of lists
                         data_export = [clean_new.columns.tolist()] + clean_new.values.tolist()
                         ws.update(data_export)
                         
@@ -331,7 +337,9 @@ with tab2:
     mask = (df['反思會'].str.upper() == 'Y') & (df['反思表'].str.upper() == 'Y') & (df['DocGeneratedDate'] == '')
     df_show = df[mask].copy()
     
-    df_show.insert(0, "選取", False)
+    # === 套用批量選取邏輯 ===
+    df_show = process_batch_selection(df_show, "選取", "tab2")
+    
     edited = st.data_editor(
         df_show, 
         column_config={"選取": st.column_config.CheckboxColumn(required=True)},
@@ -343,16 +351,14 @@ with tab2:
     if st.button("📤 匯出 & 更新狀態", key="export_status_btn"):
         selected = edited[edited["選取"]]
         if selected.empty:
-            st.warning("未選取")
+            st.warning("未選取任何資料")
         else:
             today = datetime.now().strftime("%Y-%m-%d")
             ids = selected['ID序號'].tolist()
             
-            # Pandas 更新
             df.loc[df['ID序號'].isin(ids), 'DocGeneratedDate'] = today
             df.loc[df['ID序號'].isin(ids), 'ResponsibleStaff'] = staff_name
             
-            # 存雲端
             if save_data(df, selected_sheet):
                 out_df = selected.drop(columns=['選取'])
                 out_df['StaffName'] = staff_name
@@ -371,7 +377,9 @@ with tab3:
     mask = (df['DocGeneratedDate'] != '') & (df['Collected'] != 'Y')
     df_show = df[mask].copy()
     
-    df_show.insert(0, "確認", False)
+    # === 套用批量選取邏輯 ===
+    df_show = process_batch_selection(df_show, "確認", "tab3")
+    
     edited = st.data_editor(
         df_show, 
         column_config={"確認": st.column_config.CheckboxColumn(required=True)},
@@ -405,7 +413,9 @@ with tab4:
     mask = (df['Collected'] == 'Y')
     df_show = df[mask].copy()
     
-    df_show.insert(0, "撤銷", False)
+    # === 套用批量選取邏輯 ===
+    df_show = process_batch_selection(df_show, "撤銷", "tab4")
+    
     edited = st.data_editor(
         df_show, 
         column_config={"撤銷": st.column_config.CheckboxColumn(required=True)},
@@ -428,7 +438,9 @@ with tab5:
     mask = ((df['反思會'].str.upper() != 'Y') | (df['反思表'].str.upper() != 'Y')) & (df['DocGeneratedDate'] == '')
     df_show = df[mask].copy()
     
-    df_show.insert(0, "放行", False)
+    # === 套用批量選取邏輯 ===
+    df_show = process_batch_selection(df_show, "放行", "tab5")
+    
     edited = st.data_editor(
         df_show, 
         column_config={"放行": st.column_config.CheckboxColumn(required=True)},
