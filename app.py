@@ -104,6 +104,12 @@ def save_data(df, sheet_name):
             st.error(f"儲存失敗: {e}")
         return False
 
+def select_all_rows(df, selection_column, select=True):
+    """全選或取消全選指定欄位"""
+    df_copy = df.copy()
+    df_copy[selection_column] = select
+    return df_copy
+
 # ================= Session State =================
 if 'current_sheet' not in st.session_state: st.session_state.current_sheet = None
 if 'df_main' not in st.session_state: st.session_state.df_main = None
@@ -219,6 +225,14 @@ with tab2:
     mask = (df['反思會'].str.upper() == 'Y') & (df['反思表'].str.upper() == 'Y') & (df['DocGeneratedDate'] == '')
     df_show = df[mask].copy()
     
+    # 添加批量選取按鈕
+    col1, col2 = st.columns([3, 1])
+    with col2:
+        if st.button("✅ 全選", key="select_all_tab2"):
+            df_show = select_all_rows(df_show, "選取", True)
+        if st.button("❌ 取消全選", key="deselect_all_tab2"):
+            df_show = select_all_rows(df_show, "選取", False)
+    
     df_show.insert(0, "選取", False)
     edited = st.data_editor(
         df_show, 
@@ -231,7 +245,7 @@ with tab2:
     if st.button("📤 匯出 & 更新狀態", key="export_status_btn"):
         selected = edited[edited["選取"]]
         if selected.empty:
-            st.warning("未選取")
+            st.warning("未選取任何項目")
         else:
             today = datetime.now().strftime("%Y-%m-%d")
             ids = selected['ID序號'].tolist()
@@ -258,6 +272,14 @@ with tab3:
     st.subheader("步驟二：準備領取")
     mask = (df['DocGeneratedDate'] != '') & (df['Collected'] != 'Y')
     df_show = df[mask].copy()
+    
+    # 添加批量選取按鈕
+    col1, col2 = st.columns([3, 1])
+    with col2:
+        if st.button("✅ 全選", key="select_all_tab3"):
+            df_show = select_all_rows(df_show, "確認", True)
+        if st.button("❌ 取消全選", key="deselect_all_tab3"):
+            df_show = select_all_rows(df_show, "確認", False)
     
     df_show.insert(0, "確認", False)
     edited = st.data_editor(
@@ -293,6 +315,14 @@ with tab4:
     mask = (df['Collected'] == 'Y')
     df_show = df[mask].copy()
     
+    # 添加批量選取按鈕
+    col1, col2 = st.columns([3, 1])
+    with col2:
+        if st.button("✅ 全選", key="select_all_tab4"):
+            df_show = select_all_rows(df_show, "撤銷", True)
+        if st.button("❌ 取消全選", key="deselect_all_tab4"):
+            df_show = select_all_rows(df_show, "撤銷", False)
+    
     df_show.insert(0, "撤銷", False)
     edited = st.data_editor(
         df_show, 
@@ -315,6 +345,14 @@ with tab5:
     st.subheader("不符資格名單")
     mask = ((df['反思會'].str.upper() != 'Y') | (df['反思表'].str.upper() != 'Y')) & (df['DocGeneratedDate'] == '')
     df_show = df[mask].copy()
+    
+    # 添加批量選取按鈕
+    col1, col2 = st.columns([3, 1])
+    with col2:
+        if st.button("✅ 全選", key="select_all_tab5"):
+            df_show = select_all_rows(df_show, "放行", True)
+        if st.button("❌ 取消全選", key="deselect_all_tab5"):
+            df_show = select_all_rows(df_show, "放行", False)
     
     df_show.insert(0, "放行", False)
     edited = st.data_editor(
