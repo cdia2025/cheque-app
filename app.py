@@ -132,6 +132,40 @@ def delete_worksheet(worksheet_name):
         st.error(f"刪除工作表失敗: {e}")
         return False
 
+def calculate_statistics(df):
+    """計算各類別的統計數字"""
+    total_count = len(df)
+    
+    # 準備匯出：反思會=Y 且 反思表=Y 且 DocGeneratedDate 為空
+    ready_for_export = len(df[
+        (df['反思會'].str.upper() == 'Y') & 
+        (df['反思表'].str.upper() == 'Y') & 
+        (df['DocGeneratedDate'] == '')
+    ])
+    
+    # 待領取：DocGeneratedDate 不為空 且 Collected != 'Y'
+    pending_collection = len(df[
+        (df['DocGeneratedDate'] != '') & 
+        (df['Collected'] != 'Y')
+    ])
+    
+    # 已取票：Collected == 'Y'
+    collected = len(df[df['Collected'] == 'Y'])
+    
+    # 不符資格：反思會!=Y 或 反思表!=Y 且 DocGeneratedDate 為空
+    not_qualified = len(df[
+        ((df['反思會'].str.upper() != 'Y') | (df['反思表'].str.upper() != 'Y')) & 
+        (df['DocGeneratedDate'] == '')
+    ])
+    
+    return {
+        'total': total_count,
+        'ready_for_export': ready_for_export,
+        'pending_collection': pending_collection,
+        'collected': collected,
+        'not_qualified': not_qualified
+    }
+
 # ================= Session State =================
 if 'current_sheet' not in st.session_state: st.session_state.current_sheet = None
 if 'df_main' not in st.session_state: st.session_state.df_main = None
@@ -214,6 +248,25 @@ if st.session_state.df_main is None:
 
 df = st.session_state.df_main
 st.title(f"☁️ 管理：{selected_sheet}")
+
+# ================= 統計資料顯示 =================
+stats = calculate_statistics(df)
+
+# 顯示統計卡片
+col1, col2, col3, col4, col5 = st.columns(5)
+with col1:
+    st.metric(label="📊 總人數", value=stats['total'])
+with col2:
+    st.metric(label="📄 準備匯出", value=stats['ready_for_export'], delta_color="off")
+with col3:
+    st.metric(label="🔵 待領取", value=stats['pending_collection'], delta_color="off")
+with col4:
+    st.metric(label="🟢 已取票", value=stats['collected'], delta_color="off")
+with col5:
+    st.metric(label="🚫 不符", value=stats['not_qualified'], delta_color="off")
+
+# 分隔線
+st.divider()
 
 # ================= 主分頁 =================
 tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
