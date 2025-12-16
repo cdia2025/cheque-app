@@ -104,11 +104,42 @@ def save_data(df, sheet_name):
             st.error(f"儲存失敗: {e}")
         return False
 
+def delete_worksheet(worksheet_name):
+    """刪除指定的工作表"""
+    try:
+        client = get_manager_client()
+        sh = client.open_by_url(SPREADSHEET_URL)
+        
+        # 獲取要刪除的工作表
+        ws = sh.worksheet(worksheet_name)
+        
+        # 刪除工作表
+        sh.del_worksheet(ws)
+        
+        # 更新 session state
+        if st.session_state.current_sheet == worksheet_name:
+            sheet_names = get_all_sheet_names()
+            if sheet_names:
+                st.session_state.current_sheet = sheet_names[0]
+                st.session_state.df_main = load_data(st.session_state.current_sheet)
+            else:
+                st.session_state.current_sheet = None
+                st.session_state.df_main = None
+        
+        st.success(f"工作表 '{worksheet_name}' 已刪除")
+        return True
+    except Exception as e:
+        st.error(f"刪除工作表失敗: {e}")
+        return False
+
 # ================= Session State =================
 if 'current_sheet' not in st.session_state: st.session_state.current_sheet = None
 if 'df_main' not in st.session_state: st.session_state.df_main = None
 if 'export_file' not in st.session_state: st.session_state.export_file = None
 if 'staff_name' not in st.session_state: st.session_state.staff_name = ""
+if 'show_delete_confirmation' not in st.session_state: 
+    st.session_state.show_delete_confirmation = False
+    st.session_state.delete_sheet_name = ""
 
 # ================= 側邊欄 =================
 with st.sidebar:
@@ -139,6 +170,34 @@ with st.sidebar:
         st.session_state.df_main = load_data(selected_sheet)
         st.session_state.export_file = None
         st.rerun()
+
+    # 新增刪除工作表功能
+    st.divider()
+    st.subheader("🗑️ 管理工作表")
+    
+    # 刪除工作表選擇器
+    delete_sheet = st.selectbox("選擇要刪除的工作表", [""] + [name for name in sheet_names if name != selected_sheet])
+    
+    if delete_sheet:
+        if st.button(f"🗑️ 刪除工作表 '{delete_sheet}'", type="secondary"):
+            st.session_state.show_delete_confirmation = True
+            st.session_state.delete_sheet_name = delete_sheet
+    
+    # 顯示刪除確認
+    if st.session_state.show_delete_confirmation:
+        st.warning(f"⚠️ 確定要永久刪除工作表 '{st.session_state.delete_sheet_name}' 嗎？此操作無法還原！")
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("✅ 確定刪除", type="primary"):
+                if delete_worksheet(st.session_state.delete_sheet_name):
+                    st.session_state.show_delete_confirmation = False
+                    st.session_state.delete_sheet_name = ""
+                    st.rerun()
+        with col2:
+            if st.button("❌ 取消"):
+                st.session_state.show_delete_confirmation = False
+                st.session_state.delete_sheet_name = ""
+                st.rerun()
 
     if st.button("🔄 強制重新整理"):
         st.cache_data.clear()
