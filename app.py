@@ -15,6 +15,7 @@ SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1gpq9Cye25rmPgyOt508L1
 
 # Word 範本檔案名稱 (請確保此檔案已上傳至您的專案根目錄)
 TEMPLATE_FILENAME = "表格二津貼簽收記錄.docx"
+TEMPLATE_FILENAME_ENG = "表格二津貼簽收記錄(Eng).docx"
 
 # 系統欄位與順序
 REQUIRED_COLS = [
@@ -23,7 +24,7 @@ REQUIRED_COLS = [
     'Collected', 'DocGeneratedDate', 'CollectedDate', 'ResponsibleStaff'
 ]
 
-st.set_page_config(page_title="雲端實習津貼系統 (V58 下載位置調整版)", layout="wide", page_icon="🛡️")
+st.set_page_config(page_title="雲端實習津貼系統 (V59 雙語範本版)", layout="wide", page_icon="🛡️")
 
 # ================= 連線設定 =================
 
@@ -234,8 +235,10 @@ with st.sidebar:
 
     st.divider()
 
-    # 2. 下載區塊移到這裡
+    # 2. 下載區塊 (新增雙語下載)
     st.subheader("📂 下載合併範本")
+    
+    # 中文版按鈕
     if os.path.exists(TEMPLATE_FILENAME):
         with open(TEMPLATE_FILENAME, "rb") as f:
             st.download_button(
@@ -243,10 +246,25 @@ with st.sidebar:
                 data=f,
                 file_name=TEMPLATE_FILENAME,
                 mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                type="primary"
+                type="primary",
+                key="dl_btn_zh"
             )
     else:
-        st.info(f"💡 請將 '{TEMPLATE_FILENAME}' 上傳至系統根目錄以供下載。")
+        st.info(f"💡 缺少檔案: {TEMPLATE_FILENAME}")
+
+    # 英文版按鈕
+    if os.path.exists(TEMPLATE_FILENAME_ENG):
+        with open(TEMPLATE_FILENAME_ENG, "rb") as f:
+            st.download_button(
+                label="📥 下載：表格二津貼簽收記錄 (Eng)",
+                data=f,
+                file_name=TEMPLATE_FILENAME_ENG,
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                type="primary",
+                key="dl_btn_eng"
+            )
+    else:
+        st.info(f"💡 缺少檔案: {TEMPLATE_FILENAME_ENG}")
 
     st.divider()
 
