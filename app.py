@@ -23,7 +23,7 @@ REQUIRED_COLS = [
     'Collected', 'DocGeneratedDate', 'CollectedDate', 'ResponsibleStaff'
 ]
 
-st.set_page_config(page_title="雲端實習津貼系統 (V57 簽收記錄版)", layout="wide", page_icon="🛡️")
+st.set_page_config(page_title="雲端實習津貼系統 (V58 下載位置調整版)", layout="wide", page_icon="🛡️")
 
 # ================= 連線設定 =================
 
@@ -211,23 +211,8 @@ with st.sidebar:
         st.session_state.staff_name = staff_name
     
     st.divider()
-
-    # === 新增：Word 範本下載區 ===
-    st.subheader("📂 下載合併範本")
-    if os.path.exists(TEMPLATE_FILENAME):
-        with open(TEMPLATE_FILENAME, "rb") as f:
-            st.download_button(
-                label="📥 下載：表格二津貼簽收記錄",
-                data=f,
-                file_name=TEMPLATE_FILENAME,
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                type="primary"
-            )
-    else:
-        st.info(f"💡 請將 '{TEMPLATE_FILENAME}' 上傳至系統根目錄以供下載。")
     
-    st.divider()
-    
+    # 1. 先處理工作表選擇
     sheet_names = get_all_sheet_names()
     if not sheet_names:
         st.stop()
@@ -248,6 +233,24 @@ with st.sidebar:
         st.rerun()
 
     st.divider()
+
+    # 2. 下載區塊移到這裡
+    st.subheader("📂 下載合併範本")
+    if os.path.exists(TEMPLATE_FILENAME):
+        with open(TEMPLATE_FILENAME, "rb") as f:
+            st.download_button(
+                label="📥 下載：表格二津貼簽收記錄",
+                data=f,
+                file_name=TEMPLATE_FILENAME,
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                type="primary"
+            )
+    else:
+        st.info(f"💡 請將 '{TEMPLATE_FILENAME}' 上傳至系統根目錄以供下載。")
+
+    st.divider()
+
+    # 3. 管理與刪除工作表
     st.subheader("🗑️ 管理工作表")
     delete_sheet = st.selectbox("選擇要刪除的工作表", [""] + [name for name in sheet_names if name != selected_sheet])
     
