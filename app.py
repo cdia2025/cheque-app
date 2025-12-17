@@ -7,10 +7,14 @@ from datetime import datetime
 import io
 import time
 import re
+import os
 
 # ================= 設定區 =================
 # 請確認這裡是您的 Google Sheet 網址
 SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1gpq9Cye25rmPgyOt508L1sBvlIpPis45R09vn0uy434/edit"
+
+# Word 範本檔案名稱 (請確保此檔案已上傳至您的專案根目錄)
+TEMPLATE_FILENAME = "表格二津貼簽收記錄.docx"
 
 # 系統欄位與順序
 REQUIRED_COLS = [
@@ -19,7 +23,7 @@ REQUIRED_COLS = [
     'Collected', 'DocGeneratedDate', 'CollectedDate', 'ResponsibleStaff'
 ]
 
-st.set_page_config(page_title="雲端實習津貼系統 (V55 全選修復版)", layout="wide", page_icon="🛡️")
+st.set_page_config(page_title="雲端實習津貼系統 (V57 簽收記錄版)", layout="wide", page_icon="🛡️")
 
 # ================= 連線設定 =================
 
@@ -148,21 +152,17 @@ def process_batch_selection(df_target, check_col_name, key_suffix):
     """
     處理批量選取邏輯 (修復版：使用 session_state 記憶狀態)
     """
-    # 定義 Session State 的 Key
     ss_select_all = f"select_all_{key_suffix}"
     
-    # 初始化狀態
     if ss_select_all not in st.session_state:
         st.session_state[ss_select_all] = False
 
-    # 確保欄位存在
     if check_col_name not in df_target.columns:
         df_target.insert(0, check_col_name, False)
 
     with st.expander("⚡ 批量選取工具 (輸入 ID 或 全選)", expanded=False):
         c1, c2 = st.columns([3, 1])
         with c1:
-            # 文字區域本身就會保留狀態，不需要額外處理
             batch_text = st.text_area(
                 "貼上 ID (支援 Excel 複製貼上、逗號或空白分隔)", 
                 height=100, 
@@ -171,22 +171,16 @@ def process_batch_selection(df_target, check_col_name, key_suffix):
             )
         with c2:
             st.write("快捷鍵")
-            # 按鈕邏輯：點擊後更新 session state
             if st.button("✅ 全選列表", key=f"all_{key_suffix}"):
                 st.session_state[ss_select_all] = True
             
             if st.button("❌ 全部取消", key=f"clear_{key_suffix}"):
                 st.session_state[ss_select_all] = False
-                # 如果需要也可以清除文字框，但 Streamlit 清除文字框比較複雜，先清空全選狀態即可
 
-        # === 核心邏輯：根據狀態修改 DataFrame ===
-        
-        # 1. 優先處理「全選」狀態
         if st.session_state[ss_select_all]:
             df_target[check_col_name] = True
-            st.caption("🔴 目前狀態：全選模式 (若要取消請按「全部取消」)")
+            st.caption("🔴 目前狀態：全選模式")
             
-        # 2. 如果沒有全選，則檢查文字框 ID
         elif batch_text:
             ids_input = re.split(r'[,\s\n\t]+', batch_text)
             ids_input = [x.strip() for x in ids_input if x.strip()]
@@ -196,8 +190,6 @@ def process_batch_selection(df_target, check_col_name, key_suffix):
                 df_target.loc[mask, check_col_name] = True
                 match_count = mask.sum()
                 st.caption(f"已選取 {match_count} 筆符合的資料")
-        
-        # 3. 預設狀態 (全選為 False 且無文字) -> 保持原樣 (全部 False)
 
     return df_target
 
@@ -219,6 +211,22 @@ with st.sidebar:
         st.session_state.staff_name = staff_name
     
     st.divider()
+
+    # === 新增：Word 範本下載區 ===
+    st.subheader("📂 下載合併範本")
+    if os.path.exists(TEMPLATE_FILENAME):
+        with open(TEMPLATE_FILENAME, "rb") as f:
+            st.download_button(
+                label="📥 下載：表格二津貼簽收記錄",
+                data=f,
+                file_name=TEMPLATE_FILENAME,
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                type="primary"
+            )
+    else:
+        st.info(f"💡 請將 '{TEMPLATE_FILENAME}' 上傳至系統根目錄以供下載。")
+    
+    st.divider()
     
     sheet_names = get_all_sheet_names()
     if not sheet_names:
@@ -234,7 +242,6 @@ with st.sidebar:
         st.session_state.current_sheet = selected_sheet
         st.session_state.df_main = load_data(selected_sheet)
         st.session_state.export_file = None
-        # 切換工作表時重置全選狀態
         for key in list(st.session_state.keys()):
             if key.startswith("select_all_"):
                 st.session_state[key] = False
@@ -268,7 +275,6 @@ with st.sidebar:
         st.cache_data.clear()
         st.session_state.df_main = load_data(selected_sheet)
         st.session_state.export_file = None
-        # 重置全選狀態
         for key in list(st.session_state.keys()):
             if key.startswith("select_all_"):
                 st.session_state[key] = False
@@ -354,7 +360,6 @@ with tab2:
     mask = (df['反思會'].str.upper() == 'Y') & (df['反思表'].str.upper() == 'Y') & (df['DocGeneratedDate'] == '')
     df_show = df[mask].copy()
     
-    # === 套用批量選取邏輯 ===
     df_show = process_batch_selection(df_show, "選取", "tab2")
     
     edited = st.data_editor(
@@ -377,7 +382,6 @@ with tab2:
             df.loc[df['ID序號'].isin(ids), 'ResponsibleStaff'] = staff_name
             
             if save_data(df, selected_sheet):
-                # 清除全選狀態
                 st.session_state["select_all_tab2"] = False
                 
                 out_df = selected.drop(columns=['選取'])
@@ -397,7 +401,6 @@ with tab3:
     mask = (df['DocGeneratedDate'] != '') & (df['Collected'] != 'Y')
     df_show = df[mask].copy()
     
-    # === 套用批量選取邏輯 ===
     df_show = process_batch_selection(df_show, "確認", "tab3")
     
     edited = st.data_editor(
@@ -417,7 +420,7 @@ with tab3:
                 df.loc[df['ID序號'].isin(ids), 'Collected'] = 'Y'
                 df.loc[df['ID序號'].isin(ids), 'CollectedDate'] = now
                 save_data(df, selected_sheet)
-                st.session_state["select_all_tab3"] = False # 重置全選
+                st.session_state["select_all_tab3"] = False
                 st.rerun()
     with c2:
         if st.button("↩️ 退回至準備匯出", key="revert_to_export_btn"):
@@ -426,7 +429,7 @@ with tab3:
                 df.loc[df['ID序號'].isin(ids), 'DocGeneratedDate'] = ''
                 df.loc[df['ID序號'].isin(ids), 'ResponsibleStaff'] = ''
                 save_data(df, selected_sheet)
-                st.session_state["select_all_tab3"] = False # 重置全選
+                st.session_state["select_all_tab3"] = False
                 st.rerun()
 
 # ---------------- TAB 4: 已取票 ----------------
@@ -435,7 +438,6 @@ with tab4:
     mask = (df['Collected'] == 'Y')
     df_show = df[mask].copy()
     
-    # === 套用批量選取邏輯 ===
     df_show = process_batch_selection(df_show, "撤銷", "tab4")
     
     edited = st.data_editor(
@@ -452,7 +454,7 @@ with tab4:
             df.loc[df['ID序號'].isin(ids), 'Collected'] = ''
             df.loc[df['ID序號'].isin(ids), 'CollectedDate'] = ''
             save_data(df, selected_sheet)
-            st.session_state["select_all_tab4"] = False # 重置全選
+            st.session_state["select_all_tab4"] = False
             st.rerun()
 
 # ---------------- TAB 5: 不符名單 ----------------
@@ -461,7 +463,6 @@ with tab5:
     mask = ((df['反思會'].str.upper() != 'Y') | (df['反思表'].str.upper() != 'Y')) & (df['DocGeneratedDate'] == '')
     df_show = df[mask].copy()
     
-    # === 套用批量選取邏輯 ===
     df_show = process_batch_selection(df_show, "放行", "tab5")
     
     edited = st.data_editor(
@@ -478,7 +479,7 @@ with tab5:
             df.loc[df['ID序號'].isin(ids), '反思會'] = 'Y'
             df.loc[df['ID序號'].isin(ids), '反思表'] = 'Y'
             save_data(df, selected_sheet)
-            st.session_state["select_all_tab5"] = False # 重置全選
+            st.session_state["select_all_tab5"] = False
             st.rerun()
 
 # ---------------- TAB 6: 修改資料 ----------------
