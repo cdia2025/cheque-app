@@ -25,7 +25,7 @@ REQUIRED_COLS = [
     'Collected', 'DocGeneratedDate', 'CollectedDate', 'ResponsibleStaff'
 ]
 
-st.set_page_config(page_title="雲端實習津貼系統 (V64 完整修復版)", layout="wide", page_icon="🛡️")
+st.set_page_config(page_title="雲端實習津貼系統 (V65 電話格式修復版)", layout="wide", page_icon="🛡️")
 
 # ================= 連線設定 =================
 
@@ -56,15 +56,26 @@ def get_manager_client():
 
 def clean_dataframe(df):
     """資料清洗與格式統一"""
+    # 1. 補齊欄位
     for col in REQUIRED_COLS:
         if col not in df.columns:
             df[col] = ""
+    
+    # 2. 排序與轉字串
     df = df[REQUIRED_COLS]
     df = df.astype(str)
+    
+    # 3. 清理 NaN 與空白
     for col in df.columns:
         df[col] = df[col].replace(['NaT', 'nan', 'None', '<NA>'], '')
         df[col] = df[col].str.strip()
-    df['ID序號'] = df['ID序號'].apply(lambda x: x[:-2] if x.endswith('.0') else x)
+    
+    # 4. 修復數值格式 (移除 .0) - 針對 ID、電話、編號、實習日數
+    cols_to_fix = ['ID序號', '電話', '編號', '實習日數']
+    for col in cols_to_fix:
+        if col in df.columns:
+            df[col] = df[col].apply(lambda x: x[:-2] if x.endswith('.0') else x)
+            
     return df
 
 def get_all_sheet_names():
