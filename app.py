@@ -24,7 +24,7 @@ REQUIRED_COLS = [
     'Collected', 'DocGeneratedDate', 'CollectedDate', 'ResponsibleStaff'
 ]
 
-st.set_page_config(page_title="雲端實習津貼系統 (V60 全域搜尋版)", layout="wide", page_icon="🛡️")
+st.set_page_config(page_title="雲端實習津貼系統 (V61 修復警告版)", layout="wide", page_icon="🛡️")
 
 # ================= 連線設定 =================
 
@@ -582,7 +582,7 @@ with tab6:
         },
         disabled=['ID序號', 'Collected', 'DocGeneratedDate', 'CollectedDate', 'ResponsibleStaff'],
         hide_index=True,
-        use_container_width=True,
+        width='stretch', # 已修正：V61 配合新版 Streamlit
         key="editor_main"
     )
     
@@ -620,6 +620,6 @@ with tab7:
                     "來源工作表": st.column_config.TextColumn("位於工作表", help="資料所在的 Excel 分頁名稱"),
                     "DocDate": st.column_config.TextColumn("匯出日期")
                 },
-                use_container_width=True,
+                width='stretch', # 已修正：V61 配合新版 Streamlit
                 hide_index=True
             )
