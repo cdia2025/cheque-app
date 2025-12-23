@@ -24,7 +24,7 @@ REQUIRED_COLS = [
     'Collected', 'DocGeneratedDate', 'CollectedDate', 'ResponsibleStaff'
 ]
 
-st.set_page_config(page_title="雲端實習津貼系統 (V59 雙語範本版)", layout="wide", page_icon="🛡️")
+st.set_page_config(page_title="雲端實習津貼系統 (V60 全域搜尋版)", layout="wide", page_icon="🛡️")
 
 # ================= 連線設定 =================
 
@@ -194,6 +194,67 @@ def process_batch_selection(df_target, check_col_name, key_suffix):
 
     return df_target
 
+def perform_global_search(query):
+    """執行全域搜尋 (搜尋所有工作表)"""
+    results = []
+    
+    # 取得所有工作表名稱
+    all_sheets = get_all_sheet_names()
+    
+    # 建立進度條
+    progress_bar = st.progress(0, text="準備開始搜尋...")
+    
+    total_sheets = len(all_sheets)
+    
+    for i, sheet_name in enumerate(all_sheets):
+        progress_bar.progress((i + 1) / total_sheets, text=f"正在搜尋工作表：{sheet_name} ({i+1}/{total_sheets})")
+        
+        try:
+            # 讀取資料 (利用 clean_dataframe 確保格式一致)
+            df_temp = load_data(sheet_name)
+            
+            if df_temp.empty:
+                continue
+
+            # 定義要搜尋的欄位 (避免搜尋到日期或 Y/N 等無關欄位)
+            search_cols = ['ID序號', '編號', '姓名(中文)', '姓名(英文)', '電話']
+            # 確保欄位存在
+            valid_cols = [c for c in search_cols if c in df_temp.columns]
+            
+            # 執行模糊搜尋
+            mask = df_temp[valid_cols].astype(str).apply(
+                lambda x: x.str.contains(query, case=False, na=False)
+            ).any(axis=1)
+            
+            found_rows = df_temp[mask]
+            
+            for _, row in found_rows.iterrows():
+                # 判斷狀態
+                status = "未知"
+                if row['Collected'] == 'Y':
+                    status = "🟢 已取票"
+                elif row['DocGeneratedDate'] != '':
+                    status = "🔵 待領取"
+                elif row['反思會'].upper() == 'Y' and row['反思表'].upper() == 'Y':
+                    status = "📄 準備匯出"
+                else:
+                    status = "🚫 不符/其他"
+
+                results.append({
+                    "來源工作表": sheet_name,
+                    "ID序號": row['ID序號'],
+                    "姓名(中文)": row['姓名(中文)'],
+                    "電話": row['電話'],
+                    "目前狀態": status,
+                    "DocDate": row['DocGeneratedDate']
+                })
+                
+        except Exception as e:
+            print(f"搜尋 {sheet_name} 時發生錯誤: {e}")
+            
+    progress_bar.empty()
+    return pd.DataFrame(results)
+
 # ================= Session State =================
 if 'current_sheet' not in st.session_state: st.session_state.current_sheet = None
 if 'df_main' not in st.session_state: st.session_state.df_main = None
@@ -202,6 +263,8 @@ if 'staff_name' not in st.session_state: st.session_state.staff_name = ""
 if 'show_delete_confirmation' not in st.session_state: 
     st.session_state.show_delete_confirmation = False
     st.session_state.delete_sheet_name = ""
+if 'search_results' not in st.session_state:
+    st.session_state.search_results = None
 
 # ================= 側邊欄 =================
 with st.sidebar:
@@ -235,7 +298,7 @@ with st.sidebar:
 
     st.divider()
 
-    # 2. 下載區塊 (新增雙語下載)
+    # 2. 下載區塊 (雙語下載)
     st.subheader("📂 下載合併範本")
     
     # 中文版按鈕
@@ -296,6 +359,7 @@ with st.sidebar:
         st.cache_data.clear()
         st.session_state.df_main = load_data(selected_sheet)
         st.session_state.export_file = None
+        st.session_state.search_results = None
         for key in list(st.session_state.keys()):
             if key.startswith("select_all_"):
                 st.session_state[key] = False
@@ -323,8 +387,8 @@ with col5: st.metric(label="🚫 不符", value=stats['not_qualified'], delta_co
 st.divider()
 
 # ================= 主分頁 =================
-tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
-    "📥 建立/上傳", "📄 [1] 準備匯出", "🔵 [2] 待領取", "🟢 [3] 已取票", "🚫 [4] 不符", "✏️ 修改"
+tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
+    "📥 建立/上傳", "📄 [1] 準備匯出", "🔵 [2] 待領取", "🟢 [3] 已取票", "🚫 [4] 不符", "✏️ 修改", "🔍 全域搜尋"
 ])
 
 # ---------------- TAB 1: 建立新表 ----------------
@@ -525,3 +589,37 @@ with tab6:
     if st.button("💾 儲存全部修改", type="primary", key="save_all_changes_btn"):
         save_data(edited_df, selected_sheet)
         st.rerun()
+
+# ---------------- TAB 7: 全域搜尋 (新增) ----------------
+with tab7:
+    st.subheader("🔍 搜尋全系統資料 (所有工作表)")
+    st.info("此功能會逐一讀取所有工作表，若工作表較多請耐心等候。")
+    
+    col_search, col_btn = st.columns([4, 1])
+    with col_search:
+        search_query = st.text_input("輸入關鍵字 (ID、姓名或電話)", placeholder="例如: 112001 或 陳小明")
+    with col_btn:
+        st.write("") # Spacer
+        st.write("") # Spacer
+        if st.button("🚀 開始搜尋", type="primary", key="btn_global_search"):
+            if not search_query:
+                st.warning("請輸入搜尋關鍵字！")
+            else:
+                st.session_state.search_results = perform_global_search(search_query)
+
+    st.divider()
+
+    if st.session_state.search_results is not None:
+        if st.session_state.search_results.empty:
+            st.warning(f"❌ 在所有工作表中未找到包含 '{search_query}' 的資料。")
+        else:
+            st.success(f"✅ 找到 {len(st.session_state.search_results)} 筆符合資料：")
+            st.dataframe(
+                st.session_state.search_results,
+                column_config={
+                    "來源工作表": st.column_config.TextColumn("位於工作表", help="資料所在的 Excel 分頁名稱"),
+                    "DocDate": st.column_config.TextColumn("匯出日期")
+                },
+                use_container_width=True,
+                hide_index=True
+            )
