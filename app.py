@@ -10,7 +10,7 @@ import re
 import os
 
 # ================= 設定區 =================
-# Google Sheet ID (從網址提取，比 URL 連線更穩定)
+# Google Sheet ID
 SPREADSHEET_ID = "1gpq9Cye25rmPgyOt508L1sBvlIpPis45R09vn0uy434"
 SPREADSHEET_URL = f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/edit"
 
@@ -25,7 +25,7 @@ REQUIRED_COLS = [
     'Collected', 'DocGeneratedDate', 'CollectedDate', 'ResponsibleStaff'
 ]
 
-st.set_page_config(page_title="雲端實習津貼系統 (V65 電話格式修復版)", layout="wide", page_icon="🛡️")
+st.set_page_config(page_title="雲端實習津貼系統 (V66 刪除功能版)", layout="wide", page_icon="🛡️")
 
 # ================= 連線設定 =================
 
@@ -56,21 +56,21 @@ def get_manager_client():
 
 def clean_dataframe(df):
     """資料清洗與格式統一"""
-    # 1. 補齊欄位
+    # 補齊欄位
     for col in REQUIRED_COLS:
         if col not in df.columns:
             df[col] = ""
     
-    # 2. 排序與轉字串
+    # 排序與轉字串
     df = df[REQUIRED_COLS]
     df = df.astype(str)
     
-    # 3. 清理 NaN 與空白
+    # 清理 NaN 與空白
     for col in df.columns:
         df[col] = df[col].replace(['NaT', 'nan', 'None', '<NA>'], '')
         df[col] = df[col].str.strip()
     
-    # 4. 修復數值格式 (移除 .0) - 針對 ID、電話、編號、實習日數
+    # 修復數值格式 (移除 .0)
     cols_to_fix = ['ID序號', '電話', '編號', '實習日數']
     for col in cols_to_fix:
         if col in df.columns:
@@ -78,23 +78,29 @@ def clean_dataframe(df):
             
     return df
 
-def get_all_sheet_names():
-    """取得所有工作表名稱 (加入自動重試機制以解決 500 錯誤)"""
+# 優化：增加快取，減少每次操作都去問 Google 有哪些工作表
+@st.cache_data(ttl=600) 
+def get_all_sheet_names_cached():
+    """取得所有工作表名稱 (快取版)"""
     client = get_manager_client()
     max_retries = 3
-    
     for attempt in range(max_retries):
         try:
-            # 改用 open_by_key 比較穩定
             sh = client.open_by_key(SPREADSHEET_ID)
             return [ws.title for ws in sh.worksheets()]
         except Exception as e:
             if attempt < max_retries - 1:
-                time.sleep(2) # 等待 2 秒後重試
+                time.sleep(2)
                 continue
             else:
-                st.error(f"無法讀取工作表清單 (Google 伺服器忙碌): {e}")
-                return []
+                return [] # 若失敗回傳空串列，由前端處理
+
+def get_all_sheet_names():
+    """取得工作表清單的公開介面 (處理錯誤顯示)"""
+    names = get_all_sheet_names_cached()
+    if not names:
+        st.error("無法讀取工作表清單，請稍後再試或按「強制重新整理」。")
+    return names
 
 def load_data(sheet_name):
     """讀取資料"""
@@ -110,11 +116,11 @@ def save_data(df, sheet_name):
         clean_df = clean_dataframe(df)
         conn.update(spreadsheet=SPREADSHEET_URL, worksheet=sheet_name, data=clean_df)
         st.toast("✅ 資料已同步！", icon="☁️")
-        st.session_state.df_main = clean_df
+        st.session_state.df_main = clean_df # 更新本地 Session
         return True
     except Exception as e:
         if "429" in str(e):
-            st.error("⚠️ 流量過大，請稍後再試。")
+            st.error("⚠️ 流量過大 (Error 429)，請稍後再試。")
         else:
             st.error(f"儲存失敗: {e}")
         return False
@@ -127,14 +133,12 @@ def delete_worksheet(worksheet_name):
         ws = sh.worksheet(worksheet_name)
         sh.del_worksheet(ws)
         
+        # 清除快取，確保清單更新
+        get_all_sheet_names_cached.clear()
+        
         if st.session_state.current_sheet == worksheet_name:
-            sheet_names = get_all_sheet_names()
-            if sheet_names:
-                st.session_state.current_sheet = sheet_names[0]
-                st.session_state.df_main = load_data(st.session_state.current_sheet)
-            else:
-                st.session_state.current_sheet = None
-                st.session_state.df_main = None
+            st.session_state.current_sheet = None
+            st.session_state.df_main = None
         
         st.success(f"工作表 '{worksheet_name}' 已刪除")
         return True
@@ -204,7 +208,8 @@ def process_batch_selection(df_target, check_col_name, key_suffix):
 def perform_global_search(query):
     """執行全域搜尋 (搜尋所有工作表)"""
     results = []
-    all_sheets = get_all_sheet_names()
+    # 使用快取的清單，加快開始搜尋的速度
+    all_sheets = get_all_sheet_names_cached()
     
     progress_bar = st.progress(0, text="準備開始搜尋...")
     total_sheets = len(all_sheets)
@@ -213,7 +218,10 @@ def perform_global_search(query):
         progress_bar.progress((i + 1) / total_sheets, text=f"正在搜尋工作表：{sheet_name} ({i+1}/{total_sheets})")
         
         try:
+            # 這裡必須讀取資料，無法快取，但我們加入微小的 delay 避免瞬間撞到 API 上限
             df_temp = load_data(sheet_name)
+            time.sleep(0.1) # 避免太快觸發 429
+
             if df_temp.empty: continue
 
             search_cols = ['ID序號', '編號', '姓名(中文)', '姓名(英文)', '電話']
@@ -264,6 +272,7 @@ with st.sidebar:
     
     st.divider()
     
+    # 讀取工作表清單 (使用快取版)
     sheet_names = get_all_sheet_names()
     if not sheet_names: st.stop()
         
@@ -273,6 +282,7 @@ with st.sidebar:
     idx = sheet_names.index(st.session_state.current_sheet)
     selected_sheet = st.selectbox("📂 選擇工作表", sheet_names, index=idx)
     
+    # 切換工作表時的處理
     if selected_sheet != st.session_state.current_sheet:
         st.session_state.current_sheet = selected_sheet
         st.session_state.df_main = load_data(selected_sheet)
@@ -322,7 +332,10 @@ with st.sidebar:
                 st.rerun()
 
     if st.button("🔄 強制重新整理"):
+        # 清除所有快取
         st.cache_data.clear()
+        get_all_sheet_names_cached.clear()
+        
         st.session_state.df_main = load_data(selected_sheet)
         st.session_state.export_file = None
         st.session_state.search_results = None
@@ -350,7 +363,7 @@ with col5: st.metric("🚫 不符", stats['not_qualified'])
 
 st.divider()
 
-# ================= 主分頁 (改用 Radio Button 當作導覽列以防止跳頁) =================
+# ================= 主分頁 (Radio Button 導覽) =================
 PAGES = [
     "📥 建立/上傳", 
     "📄 [1] 準備匯出", 
@@ -403,6 +416,9 @@ if selected_page == "📥 建立/上傳":
                         clean_new = clean_dataframe(new_df)
                         data_export = [clean_new.columns.tolist()] + clean_new.values.tolist()
                         ws.update(data_export)
+                        
+                        # 清除工作表清單快取
+                        get_all_sheet_names_cached.clear()
                         
                         st.success("建立成功！")
                         st.session_state.current_sheet = new_name
@@ -504,11 +520,19 @@ elif selected_page == "🚫 [4] 不符":
             st.rerun()
 
 elif selected_page == "✏️ 修改":
-    st.subheader("✏️ 直接編輯")
+    st.subheader("✏️ 直接編輯與刪除")
+    st.info("直接修改內容，完成後按「儲存全部修改」。如需刪除，請勾選「刪除」並按下方的紅色刪除按鈕。")
+    
     df_edit = df.copy()
+    
+    # === 新增：刪除功能 ===
+    # 插入刪除欄位 (預設為 False)
+    df_edit.insert(0, "刪除", False)
+    
     edited_df = st.data_editor(
         df_edit,
         column_config={
+            "刪除": st.column_config.CheckboxColumn(label="🗑️ 刪除", help="勾選以刪除此行", default=False),
             "反思會": st.column_config.SelectboxColumn(options=["Y", "N", ""], required=True),
             "反思表": st.column_config.SelectboxColumn(options=["Y", "N", ""], required=True),
             "實習日數": st.column_config.NumberColumn(min_value=0, max_value=365, step=1),
@@ -518,9 +542,31 @@ elif selected_page == "✏️ 修改":
         width='stretch',
         key="editor_main"
     )
-    if st.button("💾 儲存全部修改", type="primary"):
-        save_data(edited_df, selected_sheet)
-        st.rerun()
+    
+    col_save, col_del = st.columns(2)
+    
+    with col_save:
+        if st.button("💾 儲存全部修改", type="primary"):
+            # 儲存前移除「刪除」欄位
+            final_df = edited_df.drop(columns=['刪除'])
+            save_data(final_df, selected_sheet)
+            st.rerun()
+            
+    with col_del:
+        if st.button("🗑️ 執行刪除勾選資料", type="secondary"):
+            # 找出要刪除的 ID
+            rows_to_delete = edited_df[edited_df['刪除'] == True]
+            if rows_to_delete.empty:
+                st.warning("⚠️ 您沒有勾選任何要刪除的資料。")
+            else:
+                delete_count = len(rows_to_delete)
+                # 保留「未被勾選」的資料
+                final_df = edited_df[edited_df['刪除'] == False].drop(columns=['刪除'])
+                
+                if save_data(final_df, selected_sheet):
+                    st.success(f"✅ 已成功刪除 {delete_count} 筆資料！")
+                    time.sleep(1)
+                    st.rerun()
 
 elif selected_page == "🔍 全域搜尋":
     st.subheader("🔍 搜尋全系統資料")
